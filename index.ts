@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BunRequest } from 'bun';
 import { Command } from 'commander'; // Import commander
@@ -14,38 +14,12 @@ interface WebpackStats {
   status: string;
   chunks: Record<string, string[]>;
   assets: Record<string, WebpackAsset>;
-  startTime: number;
-  endTime: number;
+    startTime: number;
+    endTime: number;
+    // Add other relevant stats properties if needed
 }
 
-const program = new Command();
-
-program
-    .name('webpack-bundle-visualizer')
-    .description('Visualize webpack bundle stats')
-    .version('0.1.0'); // TODO: Read from package.json?
-
-program.command('serve')
-    .description('Serve the bundle visualizer web interface')
-    .argument('<stats_file_path>', 'Path to the webpack stats JSON file')
-    .option('-p, --port <number>', 'Port to run the server on', '3000')
-    .action(async (statsFilePathArg, options) => {
-        const port = Number.parseInt(options.port, 10);
-        const statsFilePath = path.resolve(statsFilePathArg); // Resolve to absolute path
-
-        if (Number.isNaN(port)) {
-            console.error(`Error: Invalid port number "${options.port}"`);
-            process.exit(1);
-        }
-
-        if (!existsSync(statsFilePath)) {
-             console.error(`Error: Stats file not found at "${statsFilePath}"`);
-             process.exit(1);
-        }
-
-        const staticHtmlPath = path.join(import.meta.dir, 'public', 'index.html');
-
-        // --- Utility Functions (Keep them accessible within the action) ---
+// --- Utility Functions ---
 
 function formatBytes(bytes: number, decimals = 2): string {
     if (!Number.isFinite(bytes) || bytes < 0) return 'N/A'; // Handle non-finite or negative numbers
@@ -76,9 +50,10 @@ function parseExcludePatterns(patternsString: string): (RegExp | string)[] {
         .filter((p): p is RegExp | string => p !== null);
 }
 
-// --- Core Data Processing and Filtering ---
 
-async function getFilteredAssets(statsPath: string, minSizeKb: number, excludePatternsStr: string | null): Promise<{ assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[] }> {
+// --- Core Data Processing Logic (Refactored for Reuse) ---
+
+async function getWebpackAssetsData(statsPath: string): Promise<{ assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[], statsFilePath: string }> {
     console.log(`Reading stats file: ${statsPath}`);
     const statsFile = Bun.file(statsPath);
     if (!(await statsFile.exists())) {
@@ -95,6 +70,15 @@ async function getFilteredAssets(statsPath: string, minSizeKb: number, excludePa
     console.log('Augmenting assets with file sizes...');
     const assetsWithWarnings: { asset: WebpackAsset, warning: string }[] = [];
     const assetPromises = Object.values(stats.assets).map(async (asset) => {
+        // Ensure asset has a path property
+        if (!asset.path) {
+             const warning = `Asset "${asset.name}" is missing the 'path' property. Cannot determine size. Size set to 0.`;
+             console.warn(`Warning: ${warning}`);
+             assetsWithWarnings.push({ asset, warning });
+             asset.size = 0;
+             return asset;
+        }
+
         const absoluteAssetPath = path.resolve(path.dirname(statsPath), asset.path);
         if (existsSync(absoluteAssetPath)) {
             const file = Bun.file(absoluteAssetPath);
@@ -109,59 +93,62 @@ async function getFilteredAssets(statsPath: string, minSizeKb: number, excludePa
         return asset;
     });
 
-    let assetsWithSize = await Promise.all(assetPromises);
+    const assetsWithSize = await Promise.all(assetPromises);
 
-    // --- Server-Side Filtering ---
-    const excludeFilters = parseExcludePatterns(excludePatternsStr || '');
-    const minSizeBytes = minSizeKb * 1024; // Convert KB to Bytes
-
-    assetsWithSize = assetsWithSize.filter(asset => {
-        const size = asset.size ?? 0;
-        const name = asset.name;
-        let hidden = false;
-
-        // Filter by minimum size
-        if (size < minSizeBytes) {
-            hidden = true;
-        }
-
-        if (!hidden && excludeFilters.length > 0) {
-            for (const filter of excludeFilters) {
-                if (filter instanceof RegExp) {
-                    if (filter.test(name)) { hidden = true; break; }
-                } else if (typeof filter === 'string') {
-                    if (name.includes(filter)) { hidden = true; break; }
-                }
-            }
-        }
-        return !hidden;
-    });
-    // --- End Server-Side Filtering ---
-
-    // Sort remaining assets
+    // Sort assets by size (descending) for consistency
     assetsWithSize.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
 
-    return { assets: assetsWithSize, warnings: assetsWithWarnings };
+    return { assets: assetsWithSize, warnings: assetsWithWarnings, statsFilePath: statsPath };
 }
 
-// --- Helper to get query params ---
-function getFilterParams(req: BunRequest): { minSizeKb: number, excludePatterns: string | null } {
-    const url = new URL(req.url);
-    const minSizeKbParam = url.searchParams.get('minSizeKb');
-    const minSizeKb = Number.parseFloat(minSizeKbParam || '1'); // Default to 1KB if missing/invalid
-    const excludePatterns = url.searchParams.get('excludePatterns'); // Keep as string | null
-    return {
-        minSizeKb: Number.isNaN(minSizeKb) ? 1 : minSizeKb,
-        excludePatterns
-    };
-}
 
-        // --- Server Configuration & Execution (Moved inside action) ---
+const program = new Command();
 
+program
+    .name('webpack-bundle-visualizer')
+    .description('Visualize webpack bundle stats')
+    .version('0.1.0'); // TODO: Read from package.json?
+
+program.command('serve')
+    .description('Serve the bundle visualizer web interface')
+    .argument('<stats_file_path>', 'Path to the webpack stats JSON file')
+    .option('-p, --port <number>', 'Port to run the server on', '3000')
+    .action(async (statsFilePathArg, options) => {
+        const port = Number.parseInt(options.port, 10);
+        const statsFilePath = path.resolve(statsFilePathArg); // Resolve to absolute path
+
+        if (Number.isNaN(port)) {
+            console.error(`Error: Invalid port number "${options.port}"`);
+            process.exit(1);
+        }
+
+        if (!existsSync(statsFilePath)) {
+             console.error(`Error: Stats file not found at "${statsFilePath}"`);
+             process.exit(1);
+        }
+
+        const staticHtmlPath = path.join(import.meta.dir, 'public', 'index.html');
+
+        // --- Helper to get query params ---
+        function getFilterParams(req: BunRequest): { minSizeKb: number, excludePatterns: string | null } {
+            const url = new URL(req.url);
+            const minSizeKbParam = url.searchParams.get('minSizeKb');
+            const minSizeKb = Number.parseFloat(minSizeKbParam || '1'); // Default to 1KB if missing/invalid
+            const excludePatterns = url.searchParams.get('excludePatterns'); // Keep as string | null
+            return {
+                minSizeKb: Number.isNaN(minSizeKb) ? 1 : minSizeKb,
+                excludePatterns
+            };
+        }
+
+        // --- Server Configuration & Execution ---
         console.log(`Attempting to analyze bundle: ${statsFilePath}`);
         console.log(`Serving static file from: ${staticHtmlPath}`);
 
         try {
+            // Get initial data (but don't filter yet for the server)
+            const { assets: allAssets, warnings: initialWarnings, statsFilePath: resolvedStatsPath } = await getWebpackAssetsData(statsFilePath);
+
             const server = Bun.serve({
                 port: port,
                 hostname: 'localhost', // Consider making this configurable?
@@ -177,26 +164,19 @@ function getFilterParams(req: BunRequest): { minSizeKb: number, excludePatterns:
                         return new Response("Not Found", { status: 404 });
                     },
 
-                    // API endpoint for table body HTML
+                    // API endpoint for table data (returns ALL assets, filtering is client-side)
                     "/api/table": async (req) => {
-                        try {
-                            const { minSizeKb, excludePatterns } = getFilterParams(req);
-                            // Pass the resolved statsFilePath to the function
-                            const { assets, warnings } = await getFilteredAssets(statsFilePath, minSizeKb, excludePatterns);
-                            // TODO: Handle warnings - maybe return them in a wrapper object?
-                            return Response.json(assets);
-                        } catch (error) {
-                            console.error("Error during /api/table request:", error);
-                            const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';
-                            const status = errorMsg.includes('Stats file not found') || errorMsg.includes('Error parsing JSON') ? 400 : 500; // Adjust status for parsing errors
-                            return Response.json({ error: errorMsg }, { status: status });
-                        }
+                        // Simply return the pre-loaded assets. Filtering happens client-side.
+                        // We already have `allAssets` from the initial `getWebpackAssetsData` call.
+                        return Response.json(allAssets);
+                        // No try-catch needed here unless `allAssets` could be invalid,
+                        // but errors during initial load are handled earlier.
                     },
 
                     // API endpoint for configuration info
                     "/api/config": (req: BunRequest) => {
-                        // Return the resolved statsFilePath
-                        return Response.json({ statsFilePath: statsFilePath });
+                        // Return the resolved statsFilePath and warnings from the initial load
+                        return Response.json({ statsFilePath: resolvedStatsPath, warnings: initialWarnings });
                     }
                 },
                 // Fallback for routes not defined above
@@ -217,5 +197,55 @@ function getFilterParams(req: BunRequest): { minSizeKb: number, excludePatterns:
             process.exit(1);
         }
     });
+
+// --- Export Command ---
+program.command('export')
+    .description('Generate a standalone HTML report with embedded stats data')
+    .argument('<stats_file_path>', 'Path to the webpack stats JSON file')
+    .option('-o, --output <path>', 'Output HTML file path', 'webpack-bundle-visualizer-report.html')
+    .action(async (statsFilePathArg, options) => {
+        const statsFilePath = path.resolve(statsFilePathArg);
+        const outputFilePath = path.resolve(options.output);
+        const templateHtmlPath = path.join(import.meta.dir, 'public', 'index.html');
+
+        console.log(`Exporting analysis for: ${statsFilePath}`);
+        console.log(`Outputting to: ${outputFilePath}`);
+
+        if (!existsSync(statsFilePath)) {
+             console.error(`Error: Stats file not found at "${statsFilePath}"`);
+             process.exit(1);
+        }
+
+        try {
+            // 1. Get Stats Data
+            const { assets, warnings, statsFilePath: resolvedStatsPath } = await getWebpackAssetsData(statsFilePath);
+
+            // 2. Read HTML Template
+            const templateHtml = readFileSync(templateHtmlPath, 'utf-8');
+
+            // 3. Prepare Data for Injection
+            const initialData = {
+                statsFilePath: resolvedStatsPath,
+                assets: assets, // Embed all assets initially
+                warnings: warnings, // Embed warnings
+                generationTime: new Date().toISOString()
+            };
+            const dataScript = `<script id="initial-data">window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};</script>`;
+
+            // 4. Inject Data into Template using Placeholder
+            // The client-side script now handles both modes based on `window.__INITIAL_DATA__`
+            // Use the dataScript variable declared above
+            const outputHtml = templateHtml.replace('//__INITIAL_DATA_PLACEHOLDER__', dataScript);
+
+            // 5. Write Output File
+            writeFileSync(outputFilePath, outputHtml);
+            console.log(`✅ Report successfully generated: ${outputFilePath}`);
+
+        } catch (error) {
+            console.error("Error during export:", error);
+            process.exit(1);
+        }
+    });
+
 
 program.parse(process.argv);

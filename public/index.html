@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Webpack Bundle Analysis</title>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
-    <script src="//cdnjs.cloudflare.com/ajax/libs/htmx/2.0.4/htmx.min.js" crossorigin="anonymous"></script>
+    <!-- HTMX is now optional, only loaded if data isn't embedded -->
     <style>
       .hidden-row { display: none; }
       body { padding-top: 0 !important; }
@@ -51,10 +51,10 @@
                          hx-include="[name='minSizeKb'], [name='excludePatterns']"
                          hx-indicator="#loading-indicator-table" />
             </div>
-            <span id="loading-indicator-table" class="htmx-indicator ml-2 text-sm text-gray-500">Loading Table...</span>
+            <span id="loading-indicator-table" class="ml-2 text-sm text-gray-500" style="display: none;">Loading Table...</span>
         </div>
 
-        <!-- Warnings container (can be populated by API if needed, or removed) -->
+        <!-- Warnings container -->
         <div id="warnings-container" class="mb-4"></div>
 
         <h2 class="text-xl font-semibold mb-3 text-gray-700">Asset Sizes</h2>
@@ -76,7 +76,10 @@
     </div>
 
     <script>
-        // --- Utility Functions (Copied from Backend) ---
+        // --- Placeholder for Export Data ---
+        //__INITIAL_DATA_PLACEHOLDER__
+
+        // --- Utility Functions ---
         function formatBytes(bytes, decimals = 2) {
             if (!Number.isFinite(bytes) || bytes < 0) return 'N/A';
             if (bytes === 0) return '0 Bytes';
@@ -87,36 +90,30 @@
             return `${Number.parseFloat((bytes / (k ** i)).toFixed(dm))} ${sizes[i]}`;
         }
 
+        // --- Global State ---
+        let allAssets = []; // Holds the full asset list (either from embedded data or API)
+        let configData = {}; // Holds config data (stats path, warnings)
+
         // --- Page Setup ---
         document.addEventListener('DOMContentLoaded', () => {
-            // Set generation time
-            document.getElementById('generation-time').textContent = new Date().toLocaleString();
+            const isExportMode = typeof window.__INITIAL_DATA__ !== 'undefined';
+            console.log(`Running in ${isExportMode ? 'Export' : 'Serve'} mode.`);
 
-            // Fetch config and update stats file path display
-            fetch('/api/config')
-                .then(response => response.json())
-                .then(config => {
-                    const statsPathElement = document.getElementById('stats-file-path');
-                    if (statsPathElement && config.statsFilePath) {
-                        statsPathElement.textContent = config.statsFilePath;
-                    } else if (statsPathElement) {
-                         statsPathElement.textContent = 'Error loading path';
-                    }
-                })
-                .catch(error => {
-                    console.error('Error fetching config:', error);
-                    const statsPathElement = document.getElementById('stats-file-path');
-                    if (statsPathElement) {
-                         statsPathElement.textContent = 'Error loading path';
-                    }
-                });
-
-            // --- LocalStorage Persistence ---
+            // --- Elements ---
+            const generationTimeEl = document.getElementById('generation-time');
+            const statsPathEl = document.getElementById('stats-file-path');
             const minSizeKbInput = document.getElementById('minSizeKb');
             const excludePatternsInput = document.getElementById('excludePatterns');
+            const tableBody = document.getElementById('asset-table-body');
+            const warningsContainer = document.getElementById('warnings-container');
+            const loadingIndicator = document.getElementById('loading-indicator-table');
+
+            // --- Initial Setup ---
+            if (generationTimeEl) generationTimeEl.textContent = new Date().toLocaleString(); // Always set current time for serve mode
+
+            // --- LocalStorage Persistence ---
             const savedMinSizeKb = localStorage.getItem('minSizeKb') || '1';
             const savedExcludePatterns = localStorage.getItem('excludePatterns') || '';
-
             if (minSizeKbInput) minSizeKbInput.value = savedMinSizeKb;
             if (excludePatternsInput) excludePatternsInput.value = savedExcludePatterns;
 
@@ -125,98 +122,186 @@
                 if (excludePatternsInput) localStorage.setItem('excludePatterns', excludePatternsInput.value);
             }
 
-            if (minSizeKbInput) minSizeKbInput.addEventListener('input', saveState);
-            if (excludePatternsInput) excludePatternsInput.addEventListener('input', saveState);
-
-            // --- HTMX Table Rendering ---
-            const tableBody = document.getElementById('asset-table-body');
-
-            document.body.addEventListener('htmx:afterRequest', function(event) {
-                // Check if the request was for our table API endpoint and successful
-                const isTableApiRequest = event.detail.requestConfig?.path === '/api/table';
-
-                if (isTableApiRequest && event.detail.successful) {
-                    // Ensure we are targeting the correct table body, even if target isn't set on event for htmx.ajax
-                    const targetTableBody = document.getElementById('asset-table-body');
-                    if (!targetTableBody) return; // Should not happen, but safety check
-
-                    try {
-                        const responseData = JSON.parse(event.detail.xhr.responseText);
-                        targetTableBody.innerHTML = ''; // Clear previous content
-
-                        // Check for backend error response
-                        if (responseData.error) {
-                             targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: ${responseData.error}</td></tr>`;
-                             return;
+            // --- Filtering Logic ---
+            function getFilterValues() {
+                const minSizeKb = parseFloat(minSizeKbInput?.value || '0');
+                const excludePatternsRaw = excludePatternsInput?.value || '';
+                const excludeFilters = excludePatternsRaw.split(',')
+                    .map(p => p.trim())
+                    .filter(p => p)
+                    .map(p => {
+                        if (p.startsWith('/') && p.endsWith('/')) {
+                            try { return new RegExp(p.slice(1, -1)); } catch (e) { console.warn('Invalid regex:', p); return null; }
                         }
+                        return p;
+                    })
+                    .filter(p => p !== null);
+                return {
+                    minSizeBytes: (isNaN(minSizeKb) ? 0 : minSizeKb) * 1024,
+                    excludeFilters
+                };
+            }
 
-                        // Assume responseData is the assets array
-                        const assets = responseData;
+            function filterAssets(assetsToFilter, filters) {
+                return assetsToFilter.filter(asset => {
+                    const size = asset.size ?? 0;
+                    const name = asset.name;
+                    let hidden = false;
 
-                        if (!Array.isArray(assets)) {
-                             throw new Error("Invalid data format received from API.");
-                        }
-
-                        if (assets.length === 0) {
-                            targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td></tr>`;
-                            return;
-                        }
-
-                        const maxSize = Math.max(...assets.map(a => a.size ?? 0));
-                        let tableHtml = '';
-
-                        assets.forEach(asset => {
-                            const sizeBytes = asset.size ?? 0;
-                            const formattedSize = formatBytes(sizeBytes);
-                            const percentage = maxSize > 0 ? ((sizeBytes / maxSize) * 100).toFixed(1) : 0;
-                            tableHtml += `
-                                <tr data-size-bytes="${sizeBytes}" data-asset-name="${asset.name}">
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 break-all">${asset.name}</td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">${formattedSize}</td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" title="${percentage}% of largest asset">
-                                          <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${percentage}%"></div>
-                                        </div>
-                                    </td>
-                                </tr>
-                            `;
-                        });
-                        targetTableBody.innerHTML = tableHtml;
-
-                    } catch (error) {
-                        console.error("Error processing table data:", error);
-                        targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error rendering table: ${error.message}</td></tr>`;
+                    if (size < filters.minSizeBytes) {
+                        hidden = true;
                     }
-                } else if (isTableApiRequest && !event.detail.successful) {
-                    // Handle failed HTMX request for the table API
-                     const targetTableBody = document.getElementById('asset-table-body');
-                     if (!targetTableBody) return;
-                     console.error("HTMX request failed for /api/table:", event.detail.xhr);
-                     targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data (Status: ${event.detail.xhr.status}). Check console.</td></tr>`;
-                 }
-             });
 
-             // Trigger initial load manually using htmx.ajax after setting values from localStorage
-             setTimeout(() => {
-                console.log("Triggering initial table load via htmx.ajax after setting localStorage values.");
-                const tableBodyTarget = document.getElementById('asset-table-body');
-                const currentMinSize = minSizeKbInput ? minSizeKbInput.value : '1';
-                const currentExclude = excludePatternsInput ? excludePatternsInput.value : '';
+                    if (!hidden && filters.excludeFilters.length > 0) {
+                        for (const filter of filters.excludeFilters) {
+                            if (filter instanceof RegExp) {
+                                if (filter.test(name)) { hidden = true; break; }
+                            } else if (typeof filter === 'string') {
+                                if (name.includes(filter)) { hidden = true; break; }
+                            }
+                        }
+                    }
+                    return !hidden;
+                });
+            }
 
-                if (tableBodyTarget) {
-                    // Use htmx.ajax to directly initiate the request
-                    htmx.ajax('GET', '/api/table', {
-                        target: tableBodyTarget, // Specify the target element
-                        values: { // Pass the current filter values
-                            minSizeKb: currentMinSize,
-                            excludePatterns: currentExclude
-                        },
-                        indicator: '#loading-indicator-table' // Explicitly link the indicator
-                    });
+            // --- Table Rendering ---
+            function renderTable(assets) {
+                if (!tableBody) return;
+                tableBody.innerHTML = ''; // Clear previous
+
+                if (!Array.isArray(assets)) {
+                    console.error("renderTable received non-array:", assets);
+                    tableBody.innerHTML = '<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: Invalid data format for table.</td></tr>';
+                    return;
                 }
-             }, 50); // Small delay to ensure DOM is fully ready
 
-         }); // End DOMContentLoaded
+                if (assets.length === 0) {
+                    tableBody.innerHTML = '<tr><td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td></tr>';
+                    return;
+                }
+
+                const maxSize = Math.max(0, ...assets.map(a => a.size ?? 0)); // Ensure maxSize is not negative
+                let tableHtml = '';
+                assets.forEach(asset => {
+                    const sizeBytes = asset.size ?? 0;
+                    const formattedSize = formatBytes(sizeBytes);
+                    // Ensure percentage is between 0 and 100
+                    const percentage = maxSize > 0 ? Math.max(0, Math.min(100, (sizeBytes / maxSize) * 100)).toFixed(1) : 0;
+                    tableHtml += `
+                        <tr data-size-bytes="${sizeBytes}" data-asset-name="${asset.name}">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 break-all">${asset.name}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">${formattedSize}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" title="${percentage}% of largest asset">
+                                  <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${percentage}%"></div>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                });
+                tableBody.innerHTML = tableHtml;
+            }
+
+             // --- Display Warnings ---
+             function displayWarnings(warnings) {
+                 if (warningsContainer && Array.isArray(warnings) && warnings.length > 0) {
+                     warningsContainer.innerHTML = '<h3 class="text-lg font-semibold text-orange-700 mb-2">Warnings:</h3><ul class="list-disc list-inside text-sm text-orange-600">';
+                     warnings.forEach(w => {
+                         warningsContainer.innerHTML += `<li>Asset: ${w.asset?.name || 'Unknown'} - ${w.warning || 'Unknown warning'}</li>`;
+                     });
+                     warningsContainer.innerHTML += '</ul>';
+                 } else if (warningsContainer) {
+                     warningsContainer.innerHTML = ''; // Clear if no warnings
+                 }
+             }
+
+            // --- Update View (Filter and Render) ---
+            function updateView() {
+                const filters = getFilterValues();
+                const filtered = filterAssets(allAssets || [], filters); // Use global allAssets
+                renderTable(filtered);
+                saveState(); // Save filter state
+            }
+
+            // --- Initialization Logic ---
+            function initializeApp(initialConfig, initialAssets) {
+                configData = initialConfig || {};
+                allAssets = initialAssets || [];
+
+                // Update static info
+                if (generationTimeEl && configData.generationTime) { // Use embedded time if available
+                     generationTimeEl.textContent = new Date(configData.generationTime).toLocaleString();
+                }
+                if (statsPathEl) statsPathEl.textContent = configData.statsFilePath || 'N/A';
+
+                // Display warnings
+                displayWarnings(configData.warnings);
+
+                // Add event listeners for filters
+                if (minSizeKbInput) minSizeKbInput.addEventListener('input', updateView);
+                if (excludePatternsInput) excludePatternsInput.addEventListener('input', updateView);
+
+                // Initial render
+                updateView();
+            }
+
+            // --- Mode-Specific Loading ---
+            if (isExportMode) {
+                // Data is embedded
+                initializeApp(window.__INITIAL_DATA__, window.__INITIAL_DATA__?.assets);
+                // Remove HTMX script if it exists (it shouldn't be added in export)
+                const htmxScript = document.querySelector('script[src*="htmx.min.js"]');
+                htmxScript?.remove();
+            } else {
+                // Serve mode: Fetch data
+                if (loadingIndicator) loadingIndicator.style.display = 'inline'; // Show loading indicator
+
+                // Dynamically load HTMX only if needed
+                const htmxScript = document.createElement('script');
+                htmxScript.src = "//cdnjs.cloudflare.com/ajax/libs/htmx/2.0.4/htmx.min.js";
+                htmxScript.crossOrigin = "anonymous";
+                htmxScript.onload = () => {
+                    console.log("HTMX loaded dynamically.");
+                    // Initialize HTMX after loading
+                    htmx.process(document.body);
+
+                    // Fetch config first
+                    fetch('/api/config')
+                        .then(response => response.ok ? response.json() : Promise.reject(`Config fetch failed: ${response.status}`))
+                        .then(config => {
+                            configData = config; // Store config globally
+                            if (statsPathEl) statsPathEl.textContent = config.statsFilePath || 'Error loading path';
+                            displayWarnings(config.warnings); // Display warnings from config
+
+                            // Now fetch all assets (no filters sent to server)
+                            return fetch('/api/table');
+                        })
+                        .then(response => response.ok ? response.json() : Promise.reject(`Table fetch failed: ${response.status}`))
+                        .then(assets => {
+                            if (assets.error) { // Check for backend error in response body
+                                return Promise.reject(`API Error: ${assets.error}`);
+                            }
+                            allAssets = assets; // Store all assets globally
+                            initializeApp(configData, allAssets); // Initialize with fetched data
+                        })
+                        .catch(error => {
+                            console.error('Error fetching data in serve mode:', error);
+                            if (tableBody) tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data: ${error}. Check console.</td></tr>`;
+                            if (statsPathEl) statsPathEl.textContent = 'Error loading path';
+                        })
+                        .finally(() => {
+                             if (loadingIndicator) loadingIndicator.style.display = 'none'; // Hide loading indicator
+                        });
+                };
+                htmxScript.onerror = () => {
+                     console.error("Failed to load HTMX script.");
+                     if (loadingIndicator) loadingIndicator.style.display = 'none';
+                     if (tableBody) tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: Could not load required script (HTMX).</td></tr>`;
+                };
+                document.head.appendChild(htmxScript); // Add HTMX script to head
+            }
+        }); // End DOMContentLoaded
     </script>
 </body>
 </html>
