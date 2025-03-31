@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs'; // Removed writeFileSync
+import { existsSync } from 'node:fs'; // Removed readFileSync and writeFileSync
 import path from 'node:path';
 import type { BunRequest } from 'bun';
 import { Command } from 'commander';
+import staticHtmlContent from './public/index.html' with { type: 'text' }; // Import HTML content directly
 
 // --- Native Webpack Stats Interfaces (Based on provided documentation) ---
 
@@ -245,11 +246,12 @@ program.command('serve')
              process.exit(1);
         }
 
-        const staticHtmlPath = path.join(import.meta.dir, 'public', 'index.html');
+        // const staticHtmlPath = path.join(import.meta.dir, 'public', 'index.html'); // No longer needed
 
         // --- Server Configuration & Execution ---
         console.log(`Attempting to analyze bundle: ${statsFilePath}`);
-        console.log(`Serving static file from: ${staticHtmlPath}`);
+        // console.log(`Serving static file from: ${staticHtmlPath}`); // No longer needed
+        // Removed erroneous console log referencing staticHtmlPath
 
         try {
             // Get the full stats data
@@ -313,15 +315,11 @@ program.command('serve')
                 port: port,
                 hostname: 'localhost', // Consider making this configurable?
                 routes: {
-                    // Serve static HTML for the root
-                    "/": async (req) => {
-                        const file = Bun.file(staticHtmlPath);
-                        if (await file.exists()) {
-                            return new Response(file, {
-                                headers: { 'Content-Type': 'text/html; charset=utf-8' }
-                            });
-                        }
-                        return new Response("Not Found", { status: 404 });
+                    // Serve static HTML for the root using the imported content
+                    "/": (req) => {
+                        return new Response(staticHtmlContent, {
+                            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                        });
                     },
 
                     // API endpoint for table data (returns ALL assets)
