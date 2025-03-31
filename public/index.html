@@ -215,34 +215,64 @@
             }
 
              // --- Display Problems (Warnings/Errors) ---
-             function displayProblems(container, problems, title, titleColor, textColor) {
+             function displayProblems(container, problems, title, titleColor, textColor, listId) { // Added listId
                  if (container && Array.isArray(problems) && problems.length > 0) {
-                     let html = `<h3 class="text-lg font-semibold ${titleColor} mb-2">${title}: (${problems.length})</h3><ul class="list-disc list-inside text-sm ${textColor} space-y-1">`;
+                     // Use <details> and <summary> for native collapsible behavior
+                     let html = `
+                        <details class="border border-gray-200 rounded mb-2 bg-gray-50/50" open="false">
+                            <summary class="cursor-pointer p-2 ${titleColor} font-semibold text-base flex justify-between items-center">
+                                <span>${title}: (${problems.length})</span>
+                                <span class="text-xs font-normal text-gray-500">(Click to expand)</span>
+                            </summary>
+                            <div class="p-2 border-t border-gray-200">
+                                <ul id="${listId}" class="list-disc list-inside text-sm ${textColor} space-y-1 max-h-48 overflow-y-auto">`; // Added max-h-48 and overflow-y-auto
+
                      problems.forEach(p => {
                          html += `<li>${p.message || 'Unknown problem'}`;
                          // Add details if available
                          let details = [];
                          if (p.moduleName) details.push(`Module: ${p.moduleName}`);
                          if (p.loc) details.push(`Location: ${p.loc}`);
-                         if (p.details) details.push(`Details: ${p.details.substring(0, 100)}...`); // Truncate long details
+                         // Show more details, maybe wrap in pre/code for stack traces? For now, keep it simple.
+                         if (p.details) details.push(`Details: ${p.details.substring(0, 150)}...`);
+                         if (p.stack) details.push(`Stack: ${p.stack.substring(0, 150)}...`); // Add stack trace snippet
+
                          if (details.length > 0) {
-                             html += `<div class="problem-details">${details.join('<br>')}</div>`;
+                             // Use pre for better formatting of details/stack if needed, but simple div for now
+                             html += `<div class="problem-details pl-4 text-xs">${details.join('<br>')}</div>`;
                          }
                          html += `</li>`;
                      });
-                     html += '</ul>';
+                     html += `
+                                </ul>
+                            </div>
+                        </details>`;
                      container.innerHTML = html;
+
+                     // Add event listener to save state (optional, but good UX)
+                     const detailsElement = container.querySelector('details');
+                     if (detailsElement) {
+                         detailsElement.addEventListener('toggle', () => {
+                             localStorage.setItem(`${listId}-open`, detailsElement.open);
+                         });
+                         // Restore state
+                         const isOpen = localStorage.getItem(`${listId}-open`) === 'true';
+                         detailsElement.open = isOpen;
+                     }
+
                  } else if (container) {
                      container.innerHTML = ''; // Clear if no problems
                  }
              }
 
              function displayWarnings(warnings) {
-                 displayProblems(warningsContainer, warnings, 'Warnings', 'text-orange-700', 'text-orange-600');
+                 // Pass a unique ID for the list
+                 displayProblems(warningsContainer, warnings, 'Warnings', 'text-orange-700', 'text-orange-600', 'warnings-list');
              }
 
              function displayErrors(errors) {
-                 displayProblems(errorsContainer, errors, 'Errors', 'text-red-700', 'text-red-600');
+                  // Pass a unique ID for the list
+                 displayProblems(errorsContainer, errors, 'Errors', 'text-red-700', 'text-red-600', 'errors-list');
              }
 
             // --- Update View (Filter and Render) ---
