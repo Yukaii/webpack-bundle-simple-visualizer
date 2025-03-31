@@ -167,13 +167,14 @@
                     <p v-if="isModalLoading" class="text-gray-500">Loading...</p>
                     <p v-else-if="modalError" class="text-red-600">Error loading modules: {{ modalError }}</p>
                     <div v-else-if="selectedAssetModules && selectedAssetModules.length > 0">
-                        <!-- Restore styling on UL -->
-                        <ul class="list-disc list-inside space-y-2 max-h-[60vh] overflow-y-auto">
+                        <!-- Remove list-disc, keep other styles -->
+                        <ul class="list-inside space-y-2 max-h-[60vh] overflow-y-auto">
                             <!-- Restore ModuleItem component usage, using kebab-case -->
                             <template v-for="(mod, index) in selectedAssetModules" :key="mod.identifier || mod.name || index">
                                 <module-item
                                             :module="mod"
-                                            :format-bytes="formatBytes" />
+                                            :format-bytes="formatBytes"
+                                            :module-size-percentage="moduleSizePercentage" />
                             </template>
                         </ul>
                     </div>
@@ -190,17 +191,26 @@
         // Define component outside createApp for global usage
         const ModuleItem = defineComponent({
             template: `
-              <li :title="module.identifier || module.name">
-                <span class="font-medium text-gray-800">{{ module.name || 'Unknown Module' }}</span>
-                <span class="text-gray-600"> ({{ formatBytes(module.size) }})</span>
-                <div v-if="module.issuerName" class="text-xs text-gray-500 pl-4">
-                  imported by: {{ module.issuerName }}
+              <li :title="module.identifier || module.name" class="mb-2 pb-2 border-b border-gray-100 last:border-b-0">
+                <div class="flex justify-between items-center mb-1">
+                    <div class="min-w-0 flex-1 mr-2"> <!-- Allow shrinking and add margin -->
+                        <span class="font-medium text-gray-800 block truncate">{{ module.name || 'Unknown Module' }}</span> <!-- Truncate long names -->
+                        <span class="text-gray-600"> ({{ formatBytes(module.size) }})</span>
+                    </div>
+                    <div v-if="module.issuerName" class="text-xs text-gray-500 text-right flex-shrink-0 ml-2">
+                      imported by: {{ module.issuerName }}
+                    </div>
+                </div>
+                <!-- Visualization Bar -->
+                <div class="w-full bg-gray-200 rounded-full h-1.5 dark:bg-gray-700" :title="\`\${moduleSizePercentage(module)}% of largest module in this asset (\${formatBytes(module.size)})\`">
+                  <div class="bg-purple-600 h-1.5 rounded-full" :style="{ width: moduleSizePercentage(module) + '%' }"></div>
                 </div>
               </li>
             `,
             props: {
                 module: { type: Object, required: true },
-                formatBytes: { type: Function, required: true }
+                formatBytes: { type: Function, required: true },
+                moduleSizePercentage: { type: Function, required: true } // Add new prop
             }
         });
 
@@ -231,6 +241,7 @@
                 const modalError = ref(null);
                 const selectedAsset = ref(null); // Store the whole asset object
                 const selectedAssetModules = ref([]);
+                const maxModuleSizeInModal = ref(0); // Add state for max module size in modal
 
                 // Collapsible section state
                 const errorsOpen = ref(localStorage.getItem('errors-list-open') === 'true');
@@ -324,6 +335,15 @@
                     return Math.max(0, Math.min(100, (sizeBytes / max) * 100)).toFixed(1);
                 }
 
+                // --- New method for module percentage ---
+                function moduleSizePercentage(module) {
+                    const sizeBytes = module.size ?? 0;
+                    const max = maxModuleSizeInModal.value;
+                    if (max <= 0 || sizeBytes <= 0) return 0;
+                    return Math.max(0, Math.min(100, (sizeBytes / max) * 100)).toFixed(1);
+                }
+                // --- End new method ---
+
                 function getModulesForAssetClientSide(assetName) {
                     // This function currently returns a flat list.
                     // For true recursion, this would need to process the stats data
@@ -402,6 +422,8 @@
                             modules = await response.json();
                         }
                         selectedAssetModules.value = modules; // Assign fetched modules
+                        // Calculate max size for the newly fetched modules
+                        maxModuleSizeInModal.value = Math.max(0, ...(modules.map(m => m.size ?? 0)));
                     } catch (error) {
                         console.error(`Error getting module details for ${assetName}:`, error);
                         modalError.value = error instanceof Error ? error.message : String(error);
@@ -512,6 +534,7 @@
                     assetSizePercentage,
                     showModuleDetails,
                     closeModal,
+                    moduleSizePercentage, // Return the new method
                     ModuleItem // Return ModuleItem so template can use it
                 };
             }
