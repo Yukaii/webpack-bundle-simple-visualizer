@@ -1,21 +1,283 @@
 {
-  "status": "done",
-  "chunks": {
-    "app": ["app-0828904584990b611fb8.js"],
-    "vendor": ["vendor-abcdef1234567890.js"]
+  "errors": [],
+  "warnings": [],
+  "version": "3.6.0",
+  "hash": "87cd04b20883a998cc03",
+  "time": 283,
+  "publicPath": "",
+  "assetsByChunkName": {
+    "main": "main.chunk.js"
   },
-  "assets": {
-    "app-0828904584990b611fb8.js": {
-      "name": "app-0828904584990b611fb8.js",
-      "publicPath": "http://localhost:3000/assets/bundles/app-0828904584990b611fb8.js",
-      "path": "assets/bundles/app-0828904584990b611fb8.js"
+  "assets": [
+    {
+      "name": "main.chunk.js",
+      "size": 2865,
+      "chunks": [
+        0
+      ],
+      "chunkNames": [
+        "main"
+      ],
+      "emitted": true
     },
-    "vendor-abcdef1234567890.js": {
-        "name": "vendor-abcdef1234567890.js",
-        "publicPath": "http://localhost:3000/assets/bundles/vendor-abcdef1234567890.js",
-        "path": "assets/bundles/nonexistent-vendor.js"
+    {
+      "name": "index.html",
+      "size": 186,
+      "chunks": [],
+      "chunkNames": [],
+      "emitted": true
+    }
+  ],
+  "filteredAssets": 0,
+  "entrypoints": {
+    "main": {
+      "chunks": [
+        0
+      ],
+      "assets": [
+        "main.chunk.js"
+      ]
     }
   },
-  "startTime": 1440535322138,
-  "endTime": 1440535326804
-}
+  "chunks": [
+    {
+      "id": 0,
+      "rendered": true,
+      "initial": true,
+      "entry": true,
+      "extraAsync": false,
+      "size": 45,
+      "names": [
+        "main"
+      ],
+      "files": [
+        "main.chunk.js"
+      ],
+      "hash": "54f4fb92cbb2e25796c8",
+      "parents": [],
+      "modules": [
+        {
+          "id": 0,
+          "identifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+          "name": "./src/index.js",
+          "index": 0,
+          "index2": 1,
+          "size": 24,
+          "cacheable": true,
+          "built": true,
+          "optional": false,
+          "prefetched": false,
+          "chunks": [
+            0
+          ],
+          "assets": [],
+          "issuer": null,
+          "issuerId": null,
+          "issuerName": null,
+          "failed": false,
+          "errors": 0,
+          "warnings": 0,
+          "reasons": [],
+          "usedExports": true,
+          "providedExports": [],
+          "optimizationBailout": [],
+          "depth": 0,
+          "source": "import foo from './foo';"
+        },
+        {
+          "id": 1,
+          "identifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/foo.js",
+          "name": "./src/foo.js",
+          "index": 1,
+          "index2": 0,
+          "size": 21,
+          "cacheable": true,
+          "built": true,
+          "optional": false,
+          "prefetched": false,
+          "chunks": [
+            0
+          ],
+          "assets": [],
+          "issuer": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+          "issuerId": 0,
+          "issuerName": "./src/index.js",
+          "failed": false,
+          "errors": 0,
+          "warnings": 0,
+          "reasons": [
+            {
+              "moduleId": 0,
+              "moduleIdentifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+              "module": "./src/index.js",
+              "moduleName": "./src/index.js",
+              "type": "harmony import",
+              "userRequest": "./foo",
+              "loc": "1:0-24"
+            }
+          ],
+          "usedExports": false,
+          "providedExports": [
+            "default"
+          ],
+          "optimizationBailout": [],
+          "depth": 1,
+          "source": "export default 'foo';"
+        }
+      ],
+      "filteredModules": 0,
+      "origins": [
+        {
+          "moduleId": 0,
+          "module": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+          "moduleIdentifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+          "moduleName": "./src/index.js",
+          "loc": "",
+          "name": "main",
+          "reasons": []
+        }
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "id": 0,
+      "identifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+      "name": "./src/index.js",
+      "index": 0,
+      "index2": 1,
+      "size": 24,
+      "cacheable": true,
+      "built": true,
+      "optional": false,
+      "prefetched": false,
+      "chunks": [
+        0
+      ],
+      "assets": [],
+      "issuer": null,
+      "issuerId": null,
+      "issuerName": null,
+      "failed": false,
+      "errors": 0,
+      "warnings": 0,
+      "reasons": [],
+      "usedExports": true,
+      "providedExports": [],
+      "optimizationBailout": [],
+      "depth": 0,
+      "source": "import foo from './foo';"
+    },
+    {
+      "id": 1,
+      "identifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/foo.js",
+      "name": "./src/foo.js",
+      "index": 1,
+      "index2": 0,
+      "size": 21,
+      "cacheable": true,
+      "built": true,
+      "optional": false,
+      "prefetched": false,
+      "chunks": [
+        0
+      ],
+      "assets": [],
+      "issuer": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+      "issuerId": 0,
+      "issuerName": "./src/index.js",
+      "failed": false,
+      "errors": 0,
+      "warnings": 0,
+      "reasons": [
+        {
+          "moduleId": 0,
+          "moduleIdentifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/src/index.js",
+          "module": "./src/index.js",
+          "moduleName": "./src/index.js",
+          "type": "harmony import",
+          "userRequest": "./foo",
+          "loc": "1:0-24"
+        }
+      ],
+      "usedExports": false,
+      "providedExports": [
+        "default"
+      ],
+      "optimizationBailout": [],
+      "depth": 1,
+      "source": "export default 'foo';"
+    }
+  ],
+  "filteredModules": 0,
+  "children": [
+    {
+      "errors": [],
+      "warnings": [],
+      "publicPath": "",
+      "assetsByChunkName": {},
+      "assets": [
+        {
+          "name": "index.html",
+          "size": 544158,
+          "chunks": [
+            0
+          ],
+          "chunkNames": []
+        }
+      ],
+      "filteredAssets": 0,
+      "entrypoints": {
+        "undefined": {
+          "chunks": [
+            0
+          ],
+          "assets": [
+            "index.html"
+          ]
+        }
+      },
+      "chunks": [
+        {
+          "id": 0,
+          "rendered": true,
+          "initial": true,
+          "entry": true,
+          "extraAsync": false,
+          "size": 541152,
+          "names": [],
+          "files": [
+            "index.html"
+          ],
+          "hash": "d3562bd6565066084079",
+          "parents": [],
+          "modules": [
+            {
+              "id": 0,
+              "identifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/node_modules/html-webpack-plugin/lib/loader.js!/mnt/c/Users/selarkin/Code/generic-webpack-project/node_modules/html-webpack-plugin/default_index.ejs",
+              "name": "./node_modules/html-webpack-plugin/lib/loader.js!./node_modules/html-webpack-plugin/default_index.ejs",
+              "index": 0,
+              "index2": 3,
+              "size": 538,
+              "cacheable": true,
+              "built": true,
+              "optional": false,
+              "prefetched": false,
+              "chunks": [
+                0
+              ],
+              "assets": [],
+              "issuer": null,
+              "issuerId": null,
+              "issuerName": null,
+              "failed": false,
+              "errors": 0,
+              "warnings": 0,
+              "reasons": [],
+              "usedExports": true,
+              "providedExports": null,
+              "optimizationBailout": [],
+              "depth": 0,
+              "source": "var _ = require(\"../lodash/lodash.js\");module.exports = function (templateParams) {var compilation = templateParams.compilation;var webpack = templateParams.webpack;var webpackConfig = templateParams.webpackConfig;var htmlWebpackPlugin = templateParams.htmlWebpackPlugin;return (function(data) {\nvar __t, __p = '';\n__p += '<!DOCTYPE html>\\n<html>\\n  <head>\\n    <meta charset=\"UTF-8\">\\n    <title>' +\n((__t = ( htmlWebpackPlugin.options.title )) == null ? '' : __t) +\n'</title>\\n  </head>\\n  <body>\\n  </body>\\n</html>';\nreturn __p\n})();}"
+            },
+            
