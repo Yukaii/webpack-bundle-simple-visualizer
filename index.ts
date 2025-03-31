@@ -182,33 +182,6 @@ try {
                 }
             },
 
-            // API endpoint for raw data HTML fragment
-            "/api/data": async (req) => {
-                try {
-                    const { minSizeKb, excludePatterns } = getFilterParams(req);
-                    const { assets } = await getFilteredAssets(statsFilePath, minSizeKb, excludePatterns);
-                    const jsonString = JSON.stringify(assets, null, 2);
-                    // Correctly escape HTML characters
-                    const escapedJsonString = jsonString.replace(/</g, '<').replace(/>/g, '>'); // Use HTML entities
-                    return new Response(`<pre class="text-xs bg-gray-100 p-2 rounded overflow-auto max-h-60"><code>${escapedJsonString}</code></pre>`, {
-                        headers: {
-                            'Content-Type': 'text/html'
-                        }
-                    });
-                } catch (error) {
-                    console.error("Error during /api/data request:", error);
-                    const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';
-                    const status = errorMsg.includes('Stats file not found') ? 404 : 500;
-                    return new Response(`<div class="text-red-600">Error fetching data: ${errorMsg}</div>`, {
-                        status: status,
-                        headers: {
-                            'Content-Type': 'text/html'
-                        }
-                    });
-                }
-            },
-
-            // API endpoint for configuration info
             // API endpoint for configuration info
             "/api/config": (req: BunRequest) => { // Add BunRequest type
                 return Response.json({ statsFilePath: statsFilePath });

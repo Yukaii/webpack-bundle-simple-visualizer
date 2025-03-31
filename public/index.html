@@ -48,24 +48,11 @@
                         hx-get="/api/table"
                         hx-trigger="input changed delay:500ms, search, load"
                         hx-target="#asset-table-body"
-                        hx-include="[name='minSizeKb'], [name='excludePatterns']"
-                        hx-indicator="#loading-indicator-table" />
+                         hx-include="[name='minSizeKb'], [name='excludePatterns']"
+                         hx-indicator="#loading-indicator-table" />
             </div>
-             <button type="button"
-                     class="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-md"
-                     hx-get="/api/data"
-                     hx-target="#raw-data-container"
-                     hx-swap="innerHTML"
-                     hx-include="[name='minSizeKb'], [name='excludePatterns']"
-                     hx-indicator="#loading-indicator-raw">
-                 Show Raw Data
-                 <span id="loading-indicator-raw" class="htmx-indicator ml-1">🔄</span>
-             </button>
             <span id="loading-indicator-table" class="htmx-indicator ml-2 text-sm text-gray-500">Loading Table...</span>
         </div>
-
-        <!-- Container for Raw Data -->
-        <div id="raw-data-container" class="mb-4"></div>
 
         <!-- Warnings container (can be populated by API if needed, or removed) -->
         <div id="warnings-container" class="mb-4"></div>
