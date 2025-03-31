@@ -32,7 +32,7 @@
                  <input type="number" id="minSizeKb" name="minSizeKb" value="1" min="0" step="0.1"
                         class="w-20 px-2 py-1 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 mr-1"
                         hx-get="/api/table"
-                        hx-trigger="input changed delay:500ms, search, load"
+                        hx-trigger="input changed delay:500ms, search"
                         hx-target="#asset-table-body"
                         hx-include="[name='excludePatterns'], [name='minSizeKb']"
                         hx-indicator="#loading-indicator-table" />
@@ -46,7 +46,7 @@
                         class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
                         title="Comma-separated list of strings or /regex/ patterns to exclude"
                         hx-get="/api/table"
-                        hx-trigger="input changed delay:500ms, search, load"
+                        hx-trigger="input changed delay:500ms, search"
                         hx-target="#asset-table-body"
                          hx-include="[name='minSizeKb'], [name='excludePatterns']"
                          hx-indicator="#loading-indicator-table" />
@@ -132,15 +132,21 @@
             const tableBody = document.getElementById('asset-table-body');
 
             document.body.addEventListener('htmx:afterRequest', function(event) {
-                // Check if the request was for our table API and successful
-                if (event.detail.target === tableBody && event.detail.successful) {
+                // Check if the request was for our table API endpoint and successful
+                const isTableApiRequest = event.detail.requestConfig?.path === '/api/table';
+
+                if (isTableApiRequest && event.detail.successful) {
+                    // Ensure we are targeting the correct table body, even if target isn't set on event for htmx.ajax
+                    const targetTableBody = document.getElementById('asset-table-body');
+                    if (!targetTableBody) return; // Should not happen, but safety check
+
                     try {
                         const responseData = JSON.parse(event.detail.xhr.responseText);
-                        tableBody.innerHTML = ''; // Clear previous content
+                        targetTableBody.innerHTML = ''; // Clear previous content
 
                         // Check for backend error response
                         if (responseData.error) {
-                             tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: ${responseData.error}</td></tr>`;
+                             targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: ${responseData.error}</td></tr>`;
                              return;
                         }
 
@@ -152,7 +158,7 @@
                         }
 
                         if (assets.length === 0) {
-                            tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td></tr>`;
+                            targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td></tr>`;
                             return;
                         }
 
@@ -175,27 +181,42 @@
                                 </tr>
                             `;
                         });
-                        tableBody.innerHTML = tableHtml;
+                        targetTableBody.innerHTML = tableHtml;
 
                     } catch (error) {
                         console.error("Error processing table data:", error);
-                        tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error rendering table: ${error.message}</td></tr>`;
+                        targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error rendering table: ${error.message}</td></tr>`;
                     }
-                } else if (event.detail.target === tableBody && !event.detail.successful) {
-                    // Handle failed HTMX request
-                     console.error("HTMX request failed:", event.detail.xhr);
-                     tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data (Status: ${event.detail.xhr.status}). Check console.</td></tr>`;
+                } else if (isTableApiRequest && !event.detail.successful) {
+                    // Handle failed HTMX request for the table API
+                     const targetTableBody = document.getElementById('asset-table-body');
+                     if (!targetTableBody) return;
+                     console.error("HTMX request failed for /api/table:", event.detail.xhr);
+                     targetTableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data (Status: ${event.detail.xhr.status}). Check console.</td></tr>`;
+                 }
+             });
+
+             // Trigger initial load manually using htmx.ajax after setting values from localStorage
+             setTimeout(() => {
+                console.log("Triggering initial table load via htmx.ajax after setting localStorage values.");
+                const tableBodyTarget = document.getElementById('asset-table-body');
+                const currentMinSize = minSizeKbInput ? minSizeKbInput.value : '1';
+                const currentExclude = excludePatternsInput ? excludePatternsInput.value : '';
+
+                if (tableBodyTarget) {
+                    // Use htmx.ajax to directly initiate the request
+                    htmx.ajax('GET', '/api/table', {
+                        target: tableBodyTarget, // Specify the target element
+                        values: { // Pass the current filter values
+                            minSizeKb: currentMinSize,
+                            excludePatterns: currentExclude
+                        },
+                        indicator: '#loading-indicator-table' // Explicitly link the indicator
+                    });
                 }
-            });
+             }, 50); // Small delay to ensure DOM is fully ready
 
-             // Trigger initial load manually if needed (HTMX 'load' trigger might suffice)
-             // Ensure inputs have values before triggering
-             // setTimeout(() => {
-             //    console.log("Triggering initial table load via HTMX.");
-             //    htmx.trigger(minSizeKbInput || excludePatternsInput, 'load');
-             // }, 50);
-
-        }); // End DOMContentLoaded
+         }); // End DOMContentLoaded
     </script>
 </body>
 </html>
