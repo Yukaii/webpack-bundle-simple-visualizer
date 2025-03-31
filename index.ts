@@ -232,10 +232,9 @@ program.command('export')
             };
             const dataScript = `<script id="initial-data">window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};</script>`;
 
-            // 4. Inject Data into Template using Placeholder
+            // 4. Inject Data into Template using HTML Comment Placeholder
             // The client-side script now handles both modes based on `window.__INITIAL_DATA__`
-            // Use the dataScript variable declared above
-            const outputHtml = templateHtml.replace('//__INITIAL_DATA_PLACEHOLDER__', dataScript);
+            const outputHtml = templateHtml.replace('<!-- __INITIAL_DATA_PLACEHOLDER__ -->', dataScript);
 
             // 5. Write Output File
             writeFileSync(outputFilePath, outputHtml);
