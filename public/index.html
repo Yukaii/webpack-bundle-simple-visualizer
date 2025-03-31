@@ -162,15 +162,21 @@
         <div :class="['modal-overlay', { 'active': isModalVisible }]" @click.self="closeModal">
             <div class="modal-content">
                 <button @click="closeModal" class="modal-close-btn" aria-label="Close modal">&times;</button>
-                <h3 class="text-xl font-semibold mb-4 text-gray-800">Modules for: {{ selectedAsset?.name }}</h3>
+                <h3 class="text-xl font-semibold mb-2 text-gray-800">Modules for: {{ selectedAsset?.name }}</h3>
+                <!-- Filter Input for Modal -->
+                <div class="mb-3">
+                    <label for="modalFilter" class="sr-only">Filter modules</label>
+                    <input type="text" id="modalFilter" v-model="modalFilterText" placeholder="Filter modules by name..."
+                           class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500">
+                </div>
                 <div class="text-sm">
                     <p v-if="isModalLoading" class="text-gray-500">Loading...</p>
                     <p v-else-if="modalError" class="text-red-600">Error loading modules: {{ modalError }}</p>
-                    <div v-else-if="selectedAssetModules && selectedAssetModules.length > 0">
+                    <div v-else-if="filteredModules && filteredModules.length > 0"> <!-- Use filteredModules -->
                         <!-- Remove list-disc, keep other styles -->
-                        <ul class="list-inside space-y-2 max-h-[60vh] overflow-y-auto overflow-x-hidden px-2">
-                            <!-- Restore ModuleItem component usage, using kebab-case -->
-                            <template v-for="(mod, index) in selectedAssetModules" :key="mod.identifier || mod.name || index">
+                        <ul class="list-inside space-y-2 max-h-[55vh] overflow-y-auto overflow-x-hidden px-2"> <!-- Adjusted max-h -->
+                            <!-- Use filteredModules -->
+                            <template v-for="(mod, index) in filteredModules" :key="mod.identifier || mod.name || index">
                                 <module-item
                                             :module="mod"
                                             :format-bytes="formatBytes"
@@ -178,6 +184,8 @@
                             </template>
                         </ul>
                     </div>
+                    <!-- Adjust message for filtering -->
+                    <p v-else-if="selectedAssetModules && selectedAssetModules.length > 0 && filteredModules.length === 0" class="text-gray-500">No modules match the filter.</p>
                     <p v-else class="text-gray-500">No module details found for this asset.</p>
                 </div>
             </div>
@@ -241,6 +249,7 @@
                 const selectedAsset = ref(null); // Store the whole asset object
                 const selectedAssetModules = ref([]);
                 const maxModuleSizeInModal = ref(0); // Add state for max module size in modal
+                const modalFilterText = ref(''); // Add state for modal filter input
 
                 // Collapsible section state
                 const errorsOpen = ref(localStorage.getItem('errors-list-open') === 'true');
@@ -310,11 +319,24 @@
                 const maxAssetSize = computed(() => {
                      // Use filteredAssets to calculate max size based on what's visible
                      if (!filteredAssets.value || filteredAssets.value.length === 0) return 0;
-                     return Math.max(0, ...filteredAssets.value.map(a => a.size ?? 0));
-                });
+                      return Math.max(0, ...filteredAssets.value.map(a => a.size ?? 0));
+                 });
 
-                // --- Methods ---
-                function formatBytes(bytes, decimals = 2) {
+                 const filteredModules = computed(() => {
+                     if (!Array.isArray(selectedAssetModules.value)) return [];
+                     const filter = modalFilterText.value.toLowerCase().trim();
+                     if (!filter) return selectedAssetModules.value; // No filter applied
+
+                     return selectedAssetModules.value.filter(mod => {
+                         const name = mod.name || '';
+                         const issuerName = mod.issuerName || '';
+                         // Check if name or issuerName includes the filter text
+                         return name.toLowerCase().includes(filter) || issuerName.toLowerCase().includes(filter);
+                     });
+                 });
+
+                 // --- Methods ---
+                 function formatBytes(bytes, decimals = 2) {
                     if (!Number.isFinite(bytes) || bytes < 0) return 'N/A';
                     if (bytes === 0) return '0 Bytes';
                     const k = 1024;
@@ -432,12 +454,13 @@
                 function closeModal() {
                     isModalVisible.value = false;
                     // Reset selected asset and modules when closing
-                    selectedAsset.value = null;
-                    selectedAssetModules.value = [];
-                    modalError.value = null;
-                }
+                     selectedAsset.value = null;
+                     selectedAssetModules.value = [];
+                     modalError.value = null;
+                     modalFilterText.value = ''; // Reset filter on close
+                 }
 
-                function saveState() {
+                 function saveState() {
                     localStorage.setItem('minSizeKb', minSizeKb.value.toString());
                     localStorage.setItem('excludePatterns', excludePatternsRaw.value);
                     localStorage.setItem('errors-list-open', errorsOpen.value.toString());
@@ -501,19 +524,21 @@
                     selectedAssetModules,
                     errorsOpen,
                     warningsOpen,
-                    // Computed
-                    formattedGenerationTime,
-                    statsFilePathDisplay,
-                    filteredAssets,
-                    // Methods
-                    formatBytes, // Make formatBytes available to the template context
+                     // Computed
+                     formattedGenerationTime,
+                     statsFilePathDisplay,
+                     filteredAssets,
+                     filteredModules, // Add computed property
+                     // Methods
+                     formatBytes, // Make formatBytes available to the template context
                     truncateText,
                     assetSizePercentage,
-                    showModuleDetails,
-                    closeModal,
-                    moduleSizePercentage, // Return the new method
-                    ModuleItem // Return ModuleItem so template can use it
-                };
+                     showModuleDetails,
+                     closeModal,
+                     moduleSizePercentage, // Return the new method
+                     modalFilterText, // Add ref
+                     ModuleItem // Return ModuleItem so template can use it
+                 };
             }
         }).mount('#app');
     </script>
