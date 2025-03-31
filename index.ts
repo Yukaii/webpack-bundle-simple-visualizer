@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { BunRequest } from 'bun'; // Import BunRequest type
+import type { BunRequest } from 'bun';
+import { Command } from 'commander'; // Import commander
 
 interface WebpackAsset {
   name: string;
@@ -17,19 +18,34 @@ interface WebpackStats {
   endTime: number;
 }
 
-// --- Argument Parsing & Config ---
-const statsFilePath = process.argv[2];
-const port = Number.parseInt(process.argv[3] || '3000', 10);
+const program = new Command();
 
-if (!statsFilePath) {
-    console.error("Error: Please provide the path to the webpack stats JSON file.");
-    console.log("Usage: bun run index.ts <stats_file_path> [port]");
-    process.exit(1);
-}
+program
+    .name('webpack-bundle-visualizer')
+    .description('Visualize webpack bundle stats')
+    .version('0.1.0'); // TODO: Read from package.json?
 
-const staticHtmlPath = path.join(import.meta.dir, 'public', 'index.html'); // Path to static HTML
+program.command('serve')
+    .description('Serve the bundle visualizer web interface')
+    .argument('<stats_file_path>', 'Path to the webpack stats JSON file')
+    .option('-p, --port <number>', 'Port to run the server on', '3000')
+    .action(async (statsFilePathArg, options) => {
+        const port = Number.parseInt(options.port, 10);
+        const statsFilePath = path.resolve(statsFilePathArg); // Resolve to absolute path
 
-// --- Utility Functions ---
+        if (Number.isNaN(port)) {
+            console.error(`Error: Invalid port number "${options.port}"`);
+            process.exit(1);
+        }
+
+        if (!existsSync(statsFilePath)) {
+             console.error(`Error: Stats file not found at "${statsFilePath}"`);
+             process.exit(1);
+        }
+
+        const staticHtmlPath = path.join(import.meta.dir, 'public', 'index.html');
+
+        // --- Utility Functions (Keep them accessible within the action) ---
 
 function formatBytes(bytes: number, decimals = 2): string {
     if (!Number.isFinite(bytes) || bytes < 0) return 'N/A'; // Handle non-finite or negative numbers
@@ -140,70 +156,66 @@ function getFilterParams(req: BunRequest): { minSizeKb: number, excludePatterns:
     };
 }
 
-// --- Server Configuration & Execution ---
+        // --- Server Configuration & Execution (Moved inside action) ---
 
-console.log(`Attempting to analyze bundle: ${statsFilePath}`);
-console.log(`Serving static file from: ${staticHtmlPath}`);
+        console.log(`Attempting to analyze bundle: ${statsFilePath}`);
+        console.log(`Serving static file from: ${staticHtmlPath}`);
 
-try {
-    const server = Bun.serve({
-        port: port,
-        hostname: 'localhost',
-        routes: {
-            // Serve static HTML for the root
-            "/": async (req) => {
-                const file = Bun.file(staticHtmlPath);
-                if (await file.exists()) {
-                    return new Response(file, {
-                        headers: { 'Content-Type': 'text/html; charset=utf-8' }
-                    });
-                }
-                return new Response("Not Found", { status: 404 });
-            },
+        try {
+            const server = Bun.serve({
+                port: port,
+                hostname: 'localhost', // Consider making this configurable?
+                routes: {
+                    // Serve static HTML for the root
+                    "/": async (req) => {
+                        const file = Bun.file(staticHtmlPath);
+                        if (await file.exists()) {
+                            return new Response(file, {
+                                headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                            });
+                        }
+                        return new Response("Not Found", { status: 404 });
+                    },
 
-            // API endpoint for table body HTML
-            "/api/table": async (req) => {
-                try {
-                    const { minSizeKb, excludePatterns } = getFilterParams(req);
-                    const { assets, warnings } = await getFilteredAssets(statsFilePath, minSizeKb, excludePatterns);
-                    // TODO: Handle warnings - maybe return them in a wrapper object?
-                    // Return assets as JSON
-                    // Return assets as JSON
-                    return Response.json(assets); // Use Response.json helper
-                } catch (error) {
-                    console.error("Error during /api/table request:", error);
-                    const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';
-                    const status = errorMsg.includes('Stats file not found') ? 404 : 500;
-                    // Return error as JSON
-                    // Return error as JSON
-                    return Response.json({ error: errorMsg }, {
-                        status: status
-                    });
-                }
-            },
+                    // API endpoint for table body HTML
+                    "/api/table": async (req) => {
+                        try {
+                            const { minSizeKb, excludePatterns } = getFilterParams(req);
+                            // Pass the resolved statsFilePath to the function
+                            const { assets, warnings } = await getFilteredAssets(statsFilePath, minSizeKb, excludePatterns);
+                            // TODO: Handle warnings - maybe return them in a wrapper object?
+                            return Response.json(assets);
+                        } catch (error) {
+                            console.error("Error during /api/table request:", error);
+                            const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';
+                            const status = errorMsg.includes('Stats file not found') || errorMsg.includes('Error parsing JSON') ? 400 : 500; // Adjust status for parsing errors
+                            return Response.json({ error: errorMsg }, { status: status });
+                        }
+                    },
 
-            // API endpoint for configuration info
-            "/api/config": (req: BunRequest) => { // Add BunRequest type
-                return Response.json({ statsFilePath: statsFilePath });
-            }
-        },
-        // Fallback for routes not defined above
-        // Fallback for routes not defined above
-        fetch(req: Request) { // Use standard Request type here
-            return new Response("Not Found", {
-                status: 404
+                    // API endpoint for configuration info
+                    "/api/config": (req: BunRequest) => {
+                        // Return the resolved statsFilePath
+                        return Response.json({ statsFilePath: statsFilePath });
+                    }
+                },
+                // Fallback for routes not defined above
+                fetch(req: Request) {
+                    return new Response("Not Found", { status: 404 });
+                },
+                error(error: Error): Response | Promise<Response> {
+                    console.error("Server startup/connection error:", error);
+                    return new Response("Internal Server Error", { status: 500 });
+                },
             });
-        },
-        error(error: Error): Response | Promise<Response> {
-            console.error("Server startup/connection error:", error);
-            return new Response("Internal Server Error", { status: 500 });
-        },
+
+            console.log(`Server running at http://${server.hostname}:${server.port}`);
+            console.log(`Serving analysis for: ${statsFilePath}`);
+
+        } catch (error) {
+            console.error("Failed to start server:", error);
+            process.exit(1);
+        }
     });
 
-    console.log(`Server running at http://${server.hostname}:${server.port}`);
-    console.log(`Serving analysis for: ${statsFilePath}`);
-
-} catch (error) {
-    console.error("Failed to start server:", error);
-    process.exit(1);
-}
+program.parse(process.argv);
