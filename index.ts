@@ -13,7 +13,65 @@ interface WebpackAssetNative {
   emitted: boolean;
   // Add other potentially useful fields from the docs if needed later
   // e.g., info: { immutable?: boolean; development?: boolean; hotModuleReplacement?: boolean; sourceFilename?: string; }
+  // Added from inspection
+  filteredAssets?: number;
+  filteredModules?: number;
 }
+
+// --- Detailed Interfaces based on test/webpack-stats.json ---
+interface WebpackReason {
+    moduleId: number | string | null; // Can be number or string ID
+    moduleIdentifier: string | null;
+    module: string | null;
+    moduleName: string | null;
+    type: string;
+    userRequest: string;
+    loc: string;
+}
+
+interface WebpackModuleNative {
+    id: number | string; // Can be number or string
+    identifier: string;
+    name: string; // Often relative path
+    index: number;
+    index2: number;
+    size: number;
+    cacheable: boolean;
+    built: boolean;
+    optional: boolean;
+    prefetched: boolean;
+    chunks: (string | number)[]; // Chunk IDs
+    assets: string[]; // Asset names associated directly? (Usually empty)
+    issuer: string | null; // Module identifier that imported this
+    issuerId: number | string | null;
+    issuerName: string | null; // Module name that imported this
+    failed: boolean;
+    errors: number;
+    warnings: number;
+    reasons: WebpackReason[];
+    usedExports: boolean | string[]; // Can be boolean or array of strings
+    providedExports: string[] | null;
+    optimizationBailout: string[];
+    depth: number;
+    source?: string; // Source code (optional)
+}
+
+interface WebpackChunkNative {
+    id: number | string;
+    rendered: boolean;
+    initial: boolean;
+    entry: boolean;
+    extraAsync: boolean;
+    size: number; // Size of the modules in the chunk
+    names: string[];
+    files: string[]; // Asset filenames generated from this chunk
+    hash: string;
+    parents: (string | number)[];
+    modules?: WebpackModuleNative[]; // Modules included in this chunk (Optional based on stats detail level)
+    filteredModules?: number;
+    origins: unknown[]; // Use unknown for complex/untyped fields
+}
+
 
 // Interface for native errors/warnings
 interface WebpackProblem {
@@ -33,14 +91,15 @@ interface WebpackStatsNative {
   outputPath?: string;
   publicPath?: string;
   assets: WebpackAssetNative[]; // List of asset objects
-  chunks?: unknown[]; // Use unknown instead of any[]
-  modules?: unknown[]; // Use unknown instead of any[]
-  entrypoints?: Record<string, unknown>; // Use unknown instead of any
+  chunks?: WebpackChunkNative[]; // Use detailed type
+  modules?: WebpackModuleNative[]; // Use detailed type
+  entrypoints?: Record<string, { chunks: (string|number)[], assets: string[] }>; // More specific type
   errors: WebpackProblem[]; // List of error objects
-  errorsCount: number;
+  errorsCount?: number; // Make optional, will calculate if missing
   warnings: WebpackProblem[]; // List of warning objects
-  warningsCount: number;
+  warningsCount?: number; // Make optional, will calculate if missing
   // Add other top-level fields if needed
+  children?: WebpackStatsNative[]; // For multi-compiler
 }
 
 
@@ -62,9 +121,10 @@ function formatBytes(bytes: number, decimals = 2): string {
 // (Not strictly needed for parsing logic below, but good for documentation)
 // type WebpackStatsInput = WebpackStatsNative | { children: WebpackStatsNative[] };
 
-// --- Core Data Processing Logic (Refactored for Native Stats) ---
+// --- Core Data Processing Logic (Refactored for Native Stats & Module Info) ---
 
-async function getWebpackStatsData(statsPath: string): Promise<{ assets: WebpackAssetNative[], warnings: WebpackProblem[], errors: WebpackProblem[], statsFilePath: string, statsData: WebpackStatsNative }> { // Return the effective stats
+// Return the full stats data now, as we need modules/chunks later
+async function getWebpackStatsData(statsPath: string): Promise<{ statsData: WebpackStatsNative, statsFilePath: string }> {
     console.log(`Reading native webpack stats file: ${statsPath}`);
     const statsFile = Bun.file(statsPath);
     if (!(await statsFile.exists())) {
@@ -82,26 +142,32 @@ async function getWebpackStatsData(statsPath: string): Promise<{ assets: Webpack
             throw new Error("Stats JSON is not an object.");
         }
 
-        // Type guard for multi-compiler structure
-        // We need to check 'children' exists and is an array before accessing it
-        if ('children' in rawStats && Array.isArray(rawStats.children) && rawStats.children.length > 0) {
-            console.log("Detected multi-compiler stats format, using first child.");
-            const firstChild = rawStats.children[0];
-            // Check if the first child is a valid stats object before assigning
-            if (typeof firstChild === 'object' && firstChild !== null && 'assets' in firstChild && Array.isArray(firstChild.assets)) {
-                 // We assume the first child conforms to WebpackStatsNative structure
-                 effectiveStats = firstChild as WebpackStatsNative;
+        // Determine the effective stats object.
+        // Prioritize top-level if it has modules, otherwise check children.
+        if ('modules' in rawStats && Array.isArray(rawStats.modules) && rawStats.modules.length > 0) {
+            console.log("Detected single-compiler stats format with modules.");
+            effectiveStats = rawStats as WebpackStatsNative;
+        } else if ('children' in rawStats && Array.isArray(rawStats.children) && rawStats.children.length > 0) {
+            console.log("Detected multi-compiler stats format.");
+            // Find the first child that looks like a valid stats object with assets
+            const validChild = rawStats.children.find(child =>
+                typeof child === 'object' && child !== null && 'assets' in child && Array.isArray(child.assets)
+            );
+            if (validChild) {
+                console.log("Using first valid child compilation for stats.");
+                effectiveStats = validChild as WebpackStatsNative;
+            } else if ('assets' in rawStats && Array.isArray(rawStats.assets)) {
+                 console.warn("Multi-compiler format detected, but no valid children found. Falling back to top-level assets (module info might be missing).");
+                 effectiveStats = rawStats as WebpackStatsNative; // Fallback to top-level if no valid child
             } else {
-                 throw new Error("First child in multi-compiler stats is not a valid stats object (missing 'assets' array?).");
+                 throw new Error("Multi-compiler stats detected, but no valid child compilation found and top-level lacks 'assets'.");
             }
-        // Check if it looks like a single stats object (has 'assets' array directly)
         } else if ('assets' in rawStats && Array.isArray(rawStats.assets)) {
-             console.log("Detected single-compiler stats format.");
-             // We assume the top-level object conforms to WebpackStatsNative
-             effectiveStats = rawStats as WebpackStatsNative;
+             console.log("Detected single-compiler stats format (modules might be missing).");
+             effectiveStats = rawStats as WebpackStatsNative; // Likely a simpler stats file without module details
         } else {
              // Handle cases where the structure doesn't match expected formats
-             throw new Error("Unrecognized stats JSON structure: Missing 'assets' array at top level or in first child.");
+             throw new Error("Unrecognized stats JSON structure: Missing 'assets' array at top level or in any child compilations.");
         }
 
         // Validation and defaults (now applied to the confirmed effectiveStats)
@@ -131,15 +197,24 @@ async function getWebpackStatsData(statsPath: string): Promise<{ assets: Webpack
 
     // Assets already have name and size. No need for augmentation.
     // Sort assets by size (descending) for consistency
-    // Add nullish coalescing for safety in case size is missing (though unlikely based on schema)
-    effectiveStats.assets.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
+    // Add nullish coalescing for safety in case size is missing
+    // Ensure assets is an array before sorting
+    if (Array.isArray(effectiveStats.assets)) {
+        effectiveStats.assets.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
+    } else {
+        console.warn("Effective stats object missing 'assets' array, cannot sort.");
+        effectiveStats.assets = []; // Ensure it's an empty array if missing
+    }
+    // Ensure modules/chunks are arrays if they exist
+    effectiveStats.modules = Array.isArray(effectiveStats.modules) ? effectiveStats.modules : [];
+    effectiveStats.chunks = Array.isArray(effectiveStats.chunks) ? effectiveStats.chunks : [];
+
+
+    console.log(`Processed stats: Found ${effectiveStats.assets.length} assets, ${effectiveStats.modules.length} modules, ${effectiveStats.chunks.length} chunks, ${effectiveStats.warningsCount} warnings, ${effectiveStats.errorsCount} errors.`);
 
     return {
-        assets: effectiveStats.assets,
-        warnings: effectiveStats.warnings,
-        errors: effectiveStats.errors,
-        statsFilePath: statsPath,
-        statsData: effectiveStats // Return the effective stats object
+        statsData: effectiveStats, // Return the entire processed stats object
+        statsFilePath: statsPath
     };
 }
 
@@ -176,8 +251,43 @@ program.command('serve')
         console.log(`Serving static file from: ${staticHtmlPath}`);
 
         try {
-            // Get initial data using the new function
-            const { assets: allAssets, warnings: allWarnings, errors: allErrors, statsFilePath: resolvedStatsPath } = await getWebpackStatsData(statsFilePath);
+            // Get the full stats data
+            const { statsData, statsFilePath: resolvedStatsPath } = await getWebpackStatsData(statsFilePath);
+            const allAssets = statsData.assets || []; // Ensure assets is an array
+            const allWarnings = statsData.warnings || [];
+            const allErrors = statsData.errors || [];
+
+            // --- Helper to find modules for an asset ---
+            const getModulesForAsset = (assetName: string): WebpackModuleNative[] => {
+                const asset = allAssets.find(a => a.name === assetName);
+                if (!asset || !statsData.chunks) return [];
+
+                const relevantChunkIds = new Set(asset.chunks);
+                const relevantModules = new Set<WebpackModuleNative>();
+
+                if (statsData.chunks) {
+                    for (const chunk of statsData.chunks) {
+                        if (relevantChunkIds.has(chunk.id) && chunk.modules) {
+                            for (const module of chunk.modules) {
+                                relevantModules.add(module);
+                            }
+                        }
+                    }
+                }
+                // Also check top-level modules if chunks don't have them detailed
+                 if (relevantModules.size === 0 && statsData.modules) {
+                     for (const module of statsData.modules) {
+                         // Check if module is associated with any of the asset's chunks
+                         if (module.chunks.some(chunkId => relevantChunkIds.has(chunkId))) {
+                             relevantModules.add(module);
+                         }
+                     } // Removed trailing }); here
+                 }
+
+                return Array.from(relevantModules).sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
+            }; // Removed trailing }); here
+            // --- End Helper ---
+
 
             const server = Bun.serve({
                 port: port,
@@ -205,9 +315,32 @@ program.command('serve')
                         return Response.json({
                             statsFilePath: resolvedStatsPath,
                             warnings: allWarnings,
-                            errors: allErrors // Include errors
+                            errors: allErrors,
+                            // Optionally include counts if needed by frontend
+                            // warningsCount: allWarnings.length,
+                            // errorsCount: allErrors.length,
                         });
-                    }
+                    },
+
+                    // API endpoint for asset details (modules)
+                    // Using typed BunRequest as per documentation example
+                    "/api/asset-details/:assetName": (req: BunRequest<"/api/asset-details/:assetName">) => {
+                         // Params are directly available on req.params with type safety
+                         const { assetName: encodedAssetName } = req.params;
+                         if (!encodedAssetName) {
+                              console.error("Could not extract assetName from req.params.");
+                              return new Response("Bad Request: Missing assetName parameter", { status: 400 });
+                         }
+                         const assetName = decodeURIComponent(encodedAssetName);
+                         console.log(`Requesting details for asset: ${assetName}`);
+                         const modules = getModulesForAsset(assetName);
+                         if (modules.length === 0) {
+                             console.log(`No modules found for asset: ${assetName}`);
+                             // Return empty array or maybe a specific message?
+                             // return new Response(`No module details found for ${assetName}`, { status: 404 });
+                         }
+                         return Response.json(modules);
+                    },
                 },
                 // Fallback for routes not defined above
                 fetch(req: Request) {
@@ -225,12 +358,14 @@ program.command('serve')
             if (allErrors.length > 0) console.error(`Error: ${allErrors.length} errors found in stats file.`);
 
 
-        } catch (error) {
+        } catch (error: unknown) { // Add type unknown
             // Catch errors from getWebpackStatsData or Bun.serve setup
-            console.error("Failed to start server:", error instanceof Error ? error.message : String(error));
+            // Check if it's an error object before accessing message
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error("Failed to start server:", errorMessage);
             process.exit(1);
         }
-    });
+    }); // Removed trailing }); here
 
 // --- Export Command ---
 program.command('export')
@@ -251,22 +386,51 @@ program.command('export')
         }
 
         try {
-            // 1. Get Stats Data using the new function
-            const { assets, warnings, errors, statsFilePath: resolvedStatsPath } = await getWebpackStatsData(statsFilePath);
+            // 1. Get Stats Data
+            // We only strictly need assets/warnings/errors for the *initial* embed
+            // Module data could be fetched on demand if the report gets too large,
+            // but for simplicity now, we'll embed everything like the serve command prepares.
+            const { statsData, statsFilePath: resolvedStatsPath } = await getWebpackStatsData(statsFilePath);
+            const assets = statsData.assets || [];
+            const warnings = statsData.warnings || [];
+            const errors = statsData.errors || [];
+            // Decide whether to embed full module data or just basics
+            const embedFullData = true; // Set to false to only embed basics
 
             // 2. Read HTML Template
             const templateHtml = readFileSync(templateHtmlPath, 'utf-8');
 
             // 3. Prepare Data for Injection
-            const initialData = {
-                statsFilePath: resolvedStatsPath,
-                assets: assets, // Embed all assets
-                warnings: warnings, // Embed warnings
-                errors: errors, // Embed errors
-                generationTime: new Date().toISOString()
-            };
-            // Use JSON.stringify with precautions for potential large objects or circular refs if necessary, though stats JSON usually isn't circular.
-            const dataScript = `<script id="initial-data">window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};</script>`;
+            const initialData = embedFullData
+                ? { // Embed everything needed for client-side rendering without API calls
+                    statsFilePath: resolvedStatsPath,
+                    assets: assets,
+                    warnings: warnings,
+                    errors: errors,
+                    modules: statsData.modules || [], // Embed modules
+                    chunks: statsData.chunks || [],   // Embed chunks
+                    generationTime: new Date().toISOString(),
+                    isExport: true // Flag for client-side logic
+                  }
+                : { // Embed only basic info, client would need API (not implemented for export)
+                    statsFilePath: resolvedStatsPath,
+                    assets: assets,
+                    warnings: warnings,
+                    errors: errors,
+                    generationTime: new Date().toISOString(),
+                    isExport: true
+                  };
+
+            // Use JSON.stringify. Be mindful of potentially very large stats files.
+            // Consider alternative embedding/loading strategies for huge files if needed.
+            let dataScript = '';
+            try {
+                 dataScript = `<script id="initial-data">window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};</script>`;
+            } catch (stringifyError) {
+                 console.error("Error stringifying initial data for export:", stringifyError);
+                 throw new Error("Failed to serialize stats data for HTML export. The stats file might be too large or contain circular references.");
+            }
+
 
             // 4. Inject Data into Template
             const outputHtml = templateHtml.replace('<!-- __INITIAL_DATA_PLACEHOLDER__ -->', dataScript);
@@ -278,12 +442,13 @@ program.command('export')
             if (errors.length > 0) console.error(`Error: ${errors.length} errors included in the report.`);
 
 
-        } catch (error) {
+        } catch (error: unknown) { // Add type unknown
              // Catch errors from getWebpackStatsData or file operations
-            console.error("Error during export:", error instanceof Error ? error.message : String(error));
+             const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error("Error during export:", errorMessage);
             process.exit(1);
         }
-    });
+    }); // Removed trailing }); here
 
 
 program.parse(process.argv);

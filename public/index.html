@@ -5,19 +5,48 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Webpack Bundle Analysis</title>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
-    <!-- HTMX is now optional, only loaded if data isn't embedded -->
+    <!-- HTMX removed, using vanilla JS -->
     <style>
-      .hidden-row { display: none; }
+      /* General Styles */
       body { padding-top: 0 !important; }
       ::-webkit-scrollbar { width: 8px; height: 8px; }
       ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
       ::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
       ::-webkit-scrollbar-thumb:hover { background: #555; }
-      .htmx-indicator{ display:none; }
-      .htmx-request .htmx-indicator{ display:inline; }
-      .htmx-request.htmx-indicator{ display:inline; }
       /* Simple styling for error/warning details */
       .problem-details { font-size: 0.8em; color: #4a5568; margin-left: 1em; }
+
+      /* Modal Styles */
+      .modal-overlay {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background-color: rgba(0, 0, 0, 0.5);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 1000; /* Ensure it's on top */
+        opacity: 0; visibility: hidden;
+        transition: opacity 0.3s ease, visibility 0.3s ease;
+      }
+      .modal-overlay.active { opacity: 1; visibility: visible; }
+      .modal-content {
+        background-color: white;
+        padding: 2rem;
+        border-radius: 0.5rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        max-width: 90%;
+        width: 60rem; /* Adjust as needed */
+        max-height: 80vh;
+        overflow-y: auto;
+        position: relative; /* For close button positioning */
+      }
+      .modal-close-btn {
+        position: absolute;
+        top: 0.5rem; right: 0.75rem;
+        background: none; border: none;
+        font-size: 1.5rem; line-height: 1;
+        cursor: pointer; color: #6b7280; /* gray-500 */
+      }
+      .modal-close-btn:hover { color: #1f2937; /* gray-800 */ }
+      .clickable-asset { cursor: pointer; text-decoration: underline; color: #2563eb; /* blue-600 */ }
+      .clickable-asset:hover { color: #1d4ed8; /* blue-800 */ }
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
@@ -31,12 +60,7 @@
              <div class="flex items-center">
                  <label for="minSizeKb" class="text-sm text-gray-700 mr-2">Hide assets <</label>
                  <input type="number" id="minSizeKb" name="minSizeKb" value="1" min="0" step="0.1"
-                        class="w-20 px-2 py-1 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 mr-1"
-                        hx-get="/api/table"
-                        hx-trigger="input changed delay:500ms, search"
-                        hx-target="#asset-table-body"
-                        hx-include="[name='excludePatterns'], [name='minSizeKb']"
-                        hx-indicator="#loading-indicator-table" />
+                        class="w-20 px-2 py-1 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 mr-1" />
                  <span class="text-sm text-gray-700">KB</span>
             </div>
             <div class="flex-grow min-w-[200px]">
@@ -44,14 +68,9 @@
                  <input type="text" id="excludePatterns" name="excludePatterns" value=""
                         placeholder="Exclude patterns (e.g., node_modules/, .map$)"
                         class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                        title="Comma-separated list of strings or /regex/ patterns to exclude"
-                        hx-get="/api/table"
-                        hx-trigger="input changed delay:500ms, search"
-                        hx-target="#asset-table-body"
-                         hx-include="[name='minSizeKb'], [name='excludePatterns']"
-                         hx-indicator="#loading-indicator-table" />
+                        title="Comma-separated list of strings or /regex/ patterns to exclude" />
             </div>
-            <span id="loading-indicator-table" class="ml-2 text-sm text-gray-500" style="display: none;">Loading Table...</span>
+            <span id="loading-indicator-table" class="ml-2 text-sm text-gray-500" style="display: none;">Loading...</span>
         </div>
 
         <!-- Errors container -->
@@ -77,6 +96,18 @@
         </div>
     </div>
 
+    <!-- Module Details Modal -->
+    <div id="module-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button id="modal-close-btn" class="modal-close-btn" aria-label="Close modal">&times;</button>
+            <h3 id="modal-title" class="text-xl font-semibold mb-4 text-gray-800">Modules for Asset</h3>
+            <div id="modal-body" class="text-sm">
+                <p>Loading module details...</p>
+                <!-- Module list will be rendered here -->
+            </div>
+        </div>
+    </div>
+
     <!-- __INITIAL_DATA_PLACEHOLDER__ -->
     <script>
         // --- Utility Functions ---
@@ -91,12 +122,14 @@
         }
 
         // --- Global State ---
-        let allAssets = []; // Holds the full asset list
+        let fullStatsData = null; // Holds the entire stats object in export mode
+        let allAssets = []; // Holds the asset list (fetched or from embedded)
         let configData = {}; // Holds config data (stats path, warnings, errors)
+        let isExportMode = false; // Flag to check mode
 
         // --- Page Setup ---
         document.addEventListener('DOMContentLoaded', () => {
-            const isExportMode = typeof window.__INITIAL_DATA__ !== 'undefined';
+            isExportMode = typeof window.__INITIAL_DATA__ !== 'undefined';
             console.log(`Running in ${isExportMode ? 'Export' : 'Serve'} mode.`);
 
             // --- Elements ---
@@ -106,11 +139,15 @@
             const excludePatternsInput = document.getElementById('excludePatterns');
             const tableBody = document.getElementById('asset-table-body');
             const warningsContainer = document.getElementById('warnings-container');
-            const errorsContainer = document.getElementById('errors-container'); // Get errors container
+            const errorsContainer = document.getElementById('errors-container');
             const loadingIndicator = document.getElementById('loading-indicator-table');
+            const moduleModal = document.getElementById('module-modal');
+            const modalCloseBtn = document.getElementById('modal-close-btn');
+            const modalTitle = document.getElementById('modal-title');
+            const modalBody = document.getElementById('modal-body');
 
             // --- Initial Setup ---
-            if (generationTimeEl) generationTimeEl.textContent = new Date().toLocaleString();
+            // generationTimeEl updated in initializeApp
 
             // --- LocalStorage Persistence ---
             const savedMinSizeKb = localStorage.getItem('minSizeKb') || '1';
@@ -199,12 +236,15 @@
                     const sizeBytes = asset.size ?? 0;
                     const formattedSize = formatBytes(sizeBytes);
                     const percentage = maxSize > 0 ? Math.max(0, Math.min(100, (sizeBytes / maxSize) * 100)).toFixed(1) : 0;
+                    // Make asset name clickable
                     tableHtml += `
-                        <tr data-size-bytes="${sizeBytes}" data-asset-name="${asset.name}">
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 break-all">${asset.name}</td>
+                        <tr data-asset-name="${asset.name}">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 break-all">
+                                <a href="#" class="clickable-asset" data-asset-name="${asset.name}">${asset.name}</a>
+                            </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">${formattedSize}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" title="${percentage}% of largest asset">
+                                <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" title="${percentage}% of largest asset (${formattedSize})">
                                   <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${percentage}%"></div>
                                 </div>
                             </td>
@@ -215,7 +255,7 @@
             }
 
              // --- Display Problems (Warnings/Errors) ---
-             function displayProblems(container, problems, title, titleColor, textColor, listId) { // Added listId
+             function displayProblems(container, problems, title, titleColor, textColor, listId) {
                  if (container && Array.isArray(problems) && problems.length > 0) {
                      // Use <details> and <summary> for native collapsible behavior
                      let html = `
@@ -283,86 +323,183 @@
                 saveState();
             }
 
-            // --- Initialization Logic ---
-            function initializeApp(initialConfig, initialAssets) {
-                configData = initialConfig || {};
-                allAssets = initialAssets || [];
+            // --- Modal Logic ---
+            function openModal() {
+                if (moduleModal) moduleModal.classList.add('active');
+            }
+            function closeModal() {
+                if (moduleModal) moduleModal.classList.remove('active');
+            }
 
-                // Update static info
-                if (generationTimeEl && configData.generationTime) {
-                     generationTimeEl.textContent = new Date(configData.generationTime).toLocaleString();
+            function getModulesForAssetClientSide(assetName) {
+                if (!fullStatsData || !Array.isArray(fullStatsData.assets)) return [];
+
+                const asset = fullStatsData.assets.find(a => a.name === assetName);
+                if (!asset || !Array.isArray(fullStatsData.chunks)) return [];
+
+                const relevantChunkIds = new Set(asset.chunks);
+                const relevantModules = new Set(); // Use Set to avoid duplicates
+
+                // Check modules within relevant chunks
+                if (Array.isArray(fullStatsData.chunks)) {
+                    fullStatsData.chunks.forEach(chunk => {
+                        if (relevantChunkIds.has(chunk.id) && Array.isArray(chunk.modules)) {
+                            chunk.modules.forEach(module => relevantModules.add(module));
+                        }
+                    });
                 }
-                if (statsPathEl) statsPathEl.textContent = configData.statsFilePath || 'N/A';
+
+                // Check top-level modules as fallback or primary source
+                if (relevantModules.size === 0 && Array.isArray(fullStatsData.modules)) {
+                     fullStatsData.modules.forEach(module => {
+                         if (Array.isArray(module.chunks) && module.chunks.some(chunkId => relevantChunkIds.has(chunkId))) {
+                             relevantModules.add(module);
+                         }
+                     });
+                 }
+
+                // Convert Set to array and sort
+                return Array.from(relevantModules).sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
+            }
+
+
+            async function showModuleDetails(assetName) {
+                if (!modalTitle || !modalBody) return;
+
+                modalTitle.textContent = `Modules for: ${assetName}`;
+                modalBody.innerHTML = '<p class="text-gray-500">Loading...</p>';
+                openModal();
+
+                let modules = [];
+                let errorMsg = null;
+
+                try {
+                    if (isExportMode) {
+                        modules = getModulesForAssetClientSide(assetName);
+                    } else {
+                        // Fetch from API in serve mode
+                        const response = await fetch(`/api/asset-details/${encodeURIComponent(assetName)}`);
+                        if (!response.ok) {
+                            throw new Error(`Failed to fetch details: ${response.status} ${response.statusText}`);
+                        }
+                        modules = await response.json();
+                    }
+                } catch (error) {
+                    console.error(`Error getting module details for ${assetName}:`, error);
+                    errorMsg = error instanceof Error ? error.message : String(error);
+                }
+
+                // Render module list or error
+                if (errorMsg) {
+                     modalBody.innerHTML = `<p class="text-red-600">Error loading modules: ${errorMsg}</p>`;
+                } else if (modules && modules.length > 0) {
+                    let modulesHtml = '<ul class="list-disc list-inside space-y-2 max-h-[60vh] overflow-y-auto">';
+                    modules.forEach(mod => {
+                        const formattedSize = formatBytes(mod.size ?? 0);
+                        // Simple display: Name (Size)
+                        // Could add more details like issuer later
+                        modulesHtml += `
+                            <li title="${mod.identifier || mod.name}">
+                                <span class="font-medium text-gray-800">${mod.name || 'Unknown Module'}</span>
+                                <span class="text-gray-600">(${formattedSize})</span>
+                                ${mod.issuerName ? `<br><span class="text-xs text-gray-500 pl-4">imported by: ${mod.issuerName}</span>` : ''}
+                            </li>`;
+                    });
+                    modulesHtml += '</ul>';
+                    modalBody.innerHTML = modulesHtml;
+                } else {
+                    modalBody.innerHTML = '<p class="text-gray-500">No module details found for this asset.</p>';
+                }
+            }
+
+            // --- Initialization Logic ---
+            function initializeApp(loadedConfig, loadedAssets) {
+                configData = loadedConfig || {};
+                allAssets = loadedAssets || []; // Store the asset list
+
+                // Update static info like generation time and stats path
+                if (generationTimeEl) {
+                    generationTimeEl.textContent = configData.generationTime
+                        ? new Date(configData.generationTime).toLocaleString()
+                        : new Date().toLocaleString(); // Fallback for serve mode
+                }
+                if (statsPathEl) statsPathEl.textContent = configData.statsFilePath || (isExportMode ? 'N/A (Embedded)' : 'Loading...');
 
                 // Display warnings and errors
-                displayWarnings(configData.warnings);
-                displayErrors(configData.errors); // Call displayErrors
+                displayWarnings(configData.warnings || []);
+                displayErrors(configData.errors || []);
 
-                // Add event listeners for filters
+                // Add event listeners AFTER elements are potentially rendered
                 if (minSizeKbInput) minSizeKbInput.addEventListener('input', updateView);
                 if (excludePatternsInput) excludePatternsInput.addEventListener('input', updateView);
 
-                // Initial render
+                // Event listener for modal close button
+                if (modalCloseBtn) modalCloseBtn.addEventListener('click', closeModal);
+                // Close modal if clicking outside the content area
+                if (moduleModal) {
+                    moduleModal.addEventListener('click', (event) => {
+                        if (event.target === moduleModal) { // Check if click is on the overlay itself
+                            closeModal();
+                        }
+                    });
+                }
+
+                // Event delegation for clicking asset names in the table
+                if (tableBody) {
+                    tableBody.addEventListener('click', (event) => {
+                        const target = event.target;
+                        // Check if the clicked element is a clickable asset link
+                        if (target.tagName === 'A' && target.classList.contains('clickable-asset')) {
+                            event.preventDefault(); // Prevent default link behavior
+                            const assetName = target.dataset.assetName;
+                            if (assetName) {
+                                showModuleDetails(assetName);
+                            }
+                        }
+                    });
+                }
+
+                // Initial render of the table
                 updateView();
             }
 
             // --- Mode-Specific Loading ---
             if (isExportMode) {
-                // Data is embedded
-                initializeApp(window.__INITIAL_DATA__, window.__INITIAL_DATA__?.assets);
-                const htmxScript = document.querySelector('script[src*="htmx.min.js"]');
-                htmxScript?.remove();
+                // Data is embedded in window.__INITIAL_DATA__
+                fullStatsData = window.__INITIAL_DATA__ || {}; // Store the full embedded data
+                initializeApp(fullStatsData, fullStatsData.assets);
             } else {
-                // Serve mode: Fetch data
+                // Serve mode: Fetch config, then assets
                 if (loadingIndicator) loadingIndicator.style.display = 'inline';
+                let fetchedConfig = {};
 
-                // Dynamically load HTMX
-                const htmxScript = document.createElement('script');
-                htmxScript.src = "//cdnjs.cloudflare.com/ajax/libs/htmx/2.0.4/htmx.min.js";
-                htmxScript.crossOrigin = "anonymous";
-                htmxScript.onload = () => {
-                    console.log("HTMX loaded dynamically.");
-                    htmx.process(document.body);
-
-                    // Fetch config first (includes warnings/errors)
-                    fetch('/api/config')
-                        .then(response => response.ok ? response.json() : Promise.reject(`Config fetch failed: ${response.status}`))
-                        .then(config => {
-                            configData = config; // Store config globally
-                            // Display config info immediately
-                            if (statsPathEl) statsPathEl.textContent = config.statsFilePath || 'Error loading path';
-                            displayWarnings(config.warnings);
-                            displayErrors(config.errors); // Display errors from config
-
-                            // Now fetch all assets
-                            return fetch('/api/table');
-                        })
-                        .then(response => response.ok ? response.json() : Promise.reject(`Table fetch failed: ${response.status}`))
-                        .then(assets => {
-                            if (assets.error) {
-                                return Promise.reject(`API Error: ${assets.error}`);
-                            }
-                            allAssets = assets; // Store all assets globally
-                            initializeApp(configData, allAssets); // Re-initialize (mainly to render table)
-                        })
-                        .catch(error => {
-                            console.error('Error fetching data in serve mode:', error);
-                            if (tableBody) tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data: ${error}. Check console.</td></tr>`;
-                            if (statsPathEl) statsPathEl.textContent = 'Error loading path';
-                            // Clear potential stale warnings/errors on fetch error
-                            displayWarnings([]);
-                            displayErrors([]);
-                        })
-                        .finally(() => {
-                             if (loadingIndicator) loadingIndicator.style.display = 'none';
-                        });
-                };
-                htmxScript.onerror = () => {
-                     console.error("Failed to load HTMX script.");
-                     if (loadingIndicator) loadingIndicator.style.display = 'none';
-                     if (tableBody) tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: Could not load required script (HTMX).</td></tr>`;
-                };
-                document.head.appendChild(htmxScript);
+                fetch('/api/config')
+                    .then(response => response.ok ? response.json() : Promise.reject(`Config fetch failed: ${response.status}`))
+                    .then(config => {
+                        fetchedConfig = config; // Store fetched config
+                        // Update path immediately
+                        if (statsPathEl) statsPathEl.textContent = config.statsFilePath || 'Error loading path';
+                        // Fetch assets now
+                        return fetch('/api/table');
+                    })
+                    .then(response => response.ok ? response.json() : Promise.reject(`Table fetch failed: ${response.status}`))
+                    .then(assets => {
+                        if (assets.error) { // Check for explicit error property from backend
+                            return Promise.reject(`API Error: ${assets.error}`);
+                        }
+                        // Combine fetched config and assets for initialization
+                        initializeApp(fetchedConfig, assets);
+                    })
+                    .catch(error => {
+                        console.error('Error fetching data in serve mode:', error);
+                        if (tableBody) tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data: ${error}. Check console.</td></tr>`;
+                        if (statsPathEl) statsPathEl.textContent = 'Error loading path';
+                        // Initialize with empty/error state
+                        initializeApp({ statsFilePath: 'Error loading path', warnings: [], errors: [{ message: `Failed to load data: ${error}` }] }, []);
+                    })
+                    .finally(() => {
+                         if (loadingIndicator) loadingIndicator.style.display = 'none';
+                    });
             }
         }); // End DOMContentLoaded
     </script>
