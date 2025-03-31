@@ -14,7 +14,6 @@ This tool provides a user interface to inspect asset sizes, filter them based on
     *   Exclude assets matching specific string patterns or regular expressions (e.g., `node_modules/`, `/\.map$/`).
 *   **Raw Data View:** Option to display the filtered asset data in JSON format.
 *   **Real File Sizes:** Attempts to read the actual size of asset files from the disk based on the paths provided in the stats file. Warns if files are not found.
-*   **CORS Control:** Allows specifying allowed origins via the `ALLOWED_ORIGIN` environment variable.
 
 ## Prerequisites
 
@@ -45,14 +44,7 @@ This tool provides a user interface to inspect asset sizes, filter them based on
     bun run index.ts ./test/webpack-stats.json 8080
     ```
 
-3.  **Configure CORS (Optional):** For production or specific development setups, set the `ALLOWED_ORIGIN` environment variable to the origin of your frontend application if it's different from the visualizer's origin.
-
-    ```bash
-    ALLOWED_ORIGIN="http://localhost:8000" bun run index.ts ./test/webpack-stats.json
-    ```
-    If not set, it defaults to `*` (allowing all origins), which is generally not recommended for production.
-
-4.  **View Analysis:** Open your web browser and navigate to `http://localhost:<port>` (e.g., `http://localhost:3000` or `http://localhost:8080` based on the port used).
+3.  **View Analysis:** Open your web browser and navigate to `http://localhost:<port>` (e.g., `http://localhost:3000` or `http://localhost:8080` based on the port used).
 
 ## Interface Guide
 

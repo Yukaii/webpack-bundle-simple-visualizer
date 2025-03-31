@@ -20,18 +20,11 @@ interface WebpackStats {
 // --- Argument Parsing & Config ---
 const statsFilePath = process.argv[2];
 const port = Number.parseInt(process.argv[3] || '3000', 10);
-const allowedOrigin = process.env.ALLOWED_ORIGIN || '*'; // Read from env, default to '*'
 
 if (!statsFilePath) {
     console.error("Error: Please provide the path to the webpack stats JSON file.");
     console.log("Usage: bun run index.ts <stats_file_path> [port]");
     process.exit(1);
-}
-
-if (allowedOrigin === '*') {
-    console.warn("Warning: ALLOWED_ORIGIN environment variable not set. Defaulting to allowing all origins ('*'). For production, set this to your specific frontend origin (e.g., 'http://localhost:8080').");
-} else {
-    console.log(`Allowing requests from origin: ${allowedOrigin}`);
 }
 
 const staticHtmlPath = path.join(import.meta.dir, 'public', 'index.html'); // Path to static HTML
@@ -175,23 +168,16 @@ try {
                     const { assets, warnings } = await getFilteredAssets(statsFilePath, minSizeKb, excludePatterns);
                     // TODO: Handle warnings - maybe return them in a wrapper object?
                     // Return assets as JSON
-                    return Response.json(assets, { // Use Response.json helper
-                        headers: {
-                            // 'Content-Type': 'application/json' is set automatically by Response.json
-                            'Access-Control-Allow-Origin': allowedOrigin
-                        }
-                    });
+                    // Return assets as JSON
+                    return Response.json(assets); // Use Response.json helper
                 } catch (error) {
                     console.error("Error during /api/table request:", error);
                     const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';
                     const status = errorMsg.includes('Stats file not found') ? 404 : 500;
                     // Return error as JSON
+                    // Return error as JSON
                     return Response.json({ error: errorMsg }, {
-                        status: status,
-                        headers: {
-                            // 'Content-Type': 'application/json' is set automatically by Response.json
-                            'Access-Control-Allow-Origin': allowedOrigin
-                        }
+                        status: status
                     });
                 }
             },
@@ -203,11 +189,10 @@ try {
                     const { assets } = await getFilteredAssets(statsFilePath, minSizeKb, excludePatterns);
                     const jsonString = JSON.stringify(assets, null, 2);
                     // Correctly escape HTML characters
-                    const escapedJsonString = jsonString.replace(/</g, '<').replace(/>/g, '>');
+                    const escapedJsonString = jsonString.replace(/</g, '<').replace(/>/g, '>'); // Use HTML entities
                     return new Response(`<pre class="text-xs bg-gray-100 p-2 rounded overflow-auto max-h-60"><code>${escapedJsonString}</code></pre>`, {
                         headers: {
-                            'Content-Type': 'text/html',
-                            'Access-Control-Allow-Origin': allowedOrigin
+                            'Content-Type': 'text/html'
                         }
                     });
                 } catch (error) {
@@ -217,27 +202,23 @@ try {
                     return new Response(`<div class="text-red-600">Error fetching data: ${errorMsg}</div>`, {
                         status: status,
                         headers: {
-                            'Content-Type': 'text/html',
-                            'Access-Control-Allow-Origin': allowedOrigin
+                            'Content-Type': 'text/html'
                         }
                     });
                 }
             },
 
             // API endpoint for configuration info
+            // API endpoint for configuration info
             "/api/config": (req: BunRequest) => { // Add BunRequest type
-                return Response.json({ statsFilePath: statsFilePath }, {
-                    headers: {
-                        'Access-Control-Allow-Origin': allowedOrigin
-                    }
-                });
+                return Response.json({ statsFilePath: statsFilePath });
             }
         },
         // Fallback for routes not defined above
+        // Fallback for routes not defined above
         fetch(req: Request) { // Use standard Request type here
             return new Response("Not Found", {
-                status: 404,
-                headers: { 'Access-Control-Allow-Origin': allowedOrigin }
+                status: 404
             });
         },
         error(error: Error): Response | Promise<Response> {
