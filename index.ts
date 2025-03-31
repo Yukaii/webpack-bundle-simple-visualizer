@@ -332,12 +332,10 @@ program.command('serve')
                               return new Response("Bad Request: Missing assetName parameter", { status: 400 });
                          }
                          const assetName = decodeURIComponent(encodedAssetName);
-                         console.log(`Requesting details for asset: ${assetName}`);
+                         // console.log(`Requesting details for asset: ${assetName}`); // Removed log
                          const modules = getModulesForAsset(assetName);
                          if (modules.length === 0) {
-                             console.log(`No modules found for asset: ${assetName}`);
-                             // Return empty array or maybe a specific message?
-                             // return new Response(`No module details found for ${assetName}`, { status: 404 });
+                             // console.log(`No modules found for asset: ${assetName}`); // Removed log
                          }
                          return Response.json(modules);
                     },

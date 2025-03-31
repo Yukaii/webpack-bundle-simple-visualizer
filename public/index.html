@@ -157,7 +157,7 @@
                 </tbody>
             </table>
         </div>
-
+        
         <!-- Module Details Modal -->
         <div :class="['modal-overlay', { 'active': isModalVisible }]" @click.self="closeModal">
             <div class="modal-content">
@@ -166,14 +166,17 @@
                 <div class="text-sm">
                     <p v-if="isModalLoading" class="text-gray-500">Loading...</p>
                     <p v-else-if="modalError" class="text-red-600">Error loading modules: {{ modalError }}</p>
-                    <ul v-else-if="selectedAssetModules && selectedAssetModules.length > 0" class="list-disc list-inside space-y-2 max-h-[60vh] overflow-y-auto">
-                        <li v-for="(mod, index) in selectedAssetModules" :key="mod.identifier || mod.name || index" :title="mod.identifier || mod.name">
-                            <span class="font-medium text-gray-800">{{ mod.name || 'Unknown Module' }}</span>
-                            <span class="text-gray-600">({{ formatBytes(mod.size) }})</span>
-                            <br v-if="mod.issuerName">
-                            <span v-if="mod.issuerName" class="text-xs text-gray-500 pl-4">imported by: {{ mod.issuerName }}</span>
-                        </li>
-                    </ul>
+                    <div v-else-if="selectedAssetModules && selectedAssetModules.length > 0">
+                        <!-- Restore styling on UL -->
+                        <ul class="list-disc list-inside space-y-2 max-h-[60vh] overflow-y-auto">
+                            <!-- Restore ModuleItem component usage, using kebab-case -->
+                            <template v-for="(mod, index) in selectedAssetModules" :key="mod.identifier || mod.name || index">
+                                <module-item
+                                            :module="mod"
+                                            :format-bytes="formatBytes" />
+                            </template>
+                        </ul>
+                    </div>
                     <p v-else class="text-gray-500">No module details found for this asset.</p>
                 </div>
             </div>
@@ -182,11 +185,30 @@
 
     <!-- __INITIAL_DATA_PLACEHOLDER__ -->
     <script>
-        const { createApp, ref, reactive, computed, onMounted, watch } = Vue;
+        const { createApp, ref, reactive, computed, onMounted, watch, defineComponent } = Vue;
+
+        // Define component outside createApp for global usage
+        const ModuleItem = defineComponent({
+            template: `
+              <li :title="module.identifier || module.name">
+                <span class="font-medium text-gray-800">{{ module.name || 'Unknown Module' }}</span>
+                <span class="text-gray-600"> ({{ formatBytes(module.size) }})</span>
+                <div v-if="module.issuerName" class="text-xs text-gray-500 pl-4">
+                  imported by: {{ module.issuerName }}
+                </div>
+              </li>
+            `,
+            props: {
+                module: { type: Object, required: true },
+                formatBytes: { type: Function, required: true }
+            }
+        });
 
         createApp({
+            components: {
+                'module-item': ModuleItem // Register with kebab-case name
+            },
             setup() {
-                // --- State ---
                 const fullStatsData = ref(null); // Holds the entire stats object in export mode
                 const allAssets = ref([]); // Holds the asset list (fetched or from embedded)
                 const configData = reactive({ // Holds config data (stats path, warnings, errors, time)
@@ -303,31 +325,62 @@
                 }
 
                 function getModulesForAssetClientSide(assetName) {
+                    // This function currently returns a flat list.
+                    // For true recursion, this would need to process the stats data
+                    // to build a hierarchical structure (e.g., modules with children based on reasons/issuers).
+                    // This is complex and depends heavily on the stats format details.
+                    // For now, it returns the same flat list, which the recursive component
+                    // will render without actual nesting.
                     if (!fullStatsData.value || !Array.isArray(fullStatsData.value.assets)) return [];
 
                     const asset = fullStatsData.value.assets.find(a => a.name === assetName);
-                    if (!asset || !Array.isArray(asset.chunks) || !Array.isArray(fullStatsData.value.chunks)) return [];
+                    // Simplified check: Ensure chunks and modules arrays exist if needed
+                    if (!asset || !Array.isArray(asset.chunks) || (!Array.isArray(fullStatsData.value.chunks) && !Array.isArray(fullStatsData.value.modules))) return [];
+
 
                     const relevantChunkIds = new Set(asset.chunks);
-                    const relevantModules = new Set();
+                    const relevantModules = new Set(); // Use Set to avoid duplicates and simplify logic
 
-                    fullStatsData.value.chunks.forEach(chunk => {
-                        if (relevantChunkIds.has(chunk.id) && Array.isArray(chunk.modules)) {
-                            chunk.modules.forEach(module => relevantModules.add(module));
-                        }
-                    });
+                    // Prioritize modules listed directly within chunks if available
+                    if (Array.isArray(fullStatsData.value.chunks)) {
+                        fullStatsData.value.chunks.forEach(chunk => {
+                            if (relevantChunkIds.has(chunk.id) && Array.isArray(chunk.modules)) {
+                                chunk.modules.forEach(module => {
+                                    // Add the module object directly. Ensure it's a valid object.
+                                    if (typeof module === 'object' && module !== null) {
+                                        relevantModules.add(module);
+                                    }
+                                });
+                            }
+                        });
+                    }
 
-                     // Fallback/Primary: Check top-level modules if chunk modules didn't yield results or aren't structured that way
-                     if (relevantModules.size === 0 && Array.isArray(fullStatsData.value.modules)) {
+                    // Fallback or primary source: Check top-level modules
+                    if (Array.isArray(fullStatsData.value.modules)) {
                          fullStatsData.value.modules.forEach(module => {
+                             // Check if module belongs to one of the asset's chunks
                              if (Array.isArray(module.chunks) && module.chunks.some(chunkId => relevantChunkIds.has(chunkId))) {
-                                 relevantModules.add(module);
+                                 // Add the module object if it's not already present from chunk processing
+                                 if (typeof module === 'object' && module !== null) {
+                                     // Check uniqueness based on identifier or name if available
+                                     const exists = Array.from(relevantModules).some(existing =>
+                                         (module.identifier && existing.identifier === module.identifier) ||
+                                         (!module.identifier && existing.name === module.name) // Fallback to name if no identifier
+                                     );
+                                     if (!exists) {
+                                         relevantModules.add(module);
+                                     }
+                                 }
                              }
                          });
                      }
 
+
+                    // Convert Set to array and sort
+                    // Note: This still returns a flat list. The recursive component handles rendering.
                     return Array.from(relevantModules).sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
                 }
+
 
                 async function showModuleDetails(assetName) {
                     selectedAsset.value = allAssets.value.find(a => a.name === assetName) || { name: assetName }; // Find the full asset object
@@ -345,9 +398,10 @@
                             if (!response.ok) {
                                 throw new Error(`Failed to fetch details: ${response.status} ${response.statusText}`);
                             }
+                            // Assuming the API returns the same flat structure for now
                             modules = await response.json();
                         }
-                        selectedAssetModules.value = modules;
+                        selectedAssetModules.value = modules; // Assign fetched modules
                     } catch (error) {
                         console.error(`Error getting module details for ${assetName}:`, error);
                         modalError.value = error instanceof Error ? error.message : String(error);
@@ -453,11 +507,12 @@
                     statsFilePathDisplay,
                     filteredAssets,
                     // Methods
-                    formatBytes,
+                    formatBytes, // Make formatBytes available to the template context
                     truncateText,
                     assetSizePercentage,
                     showModuleDetails,
-                    closeModal
+                    closeModal,
+                    ModuleItem // Return ModuleItem so template can use it
                 };
             }
         }).mount('#app');
