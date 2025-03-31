@@ -51,7 +51,7 @@ function parseExcludePatterns(patternsString: string): (RegExp | string)[] {
 
 // --- Core Data Processing and Filtering ---
 
-async function getFilteredAssets(statsPath: string, filterSmall: boolean, excludePatternsStr: string | null): Promise<{ assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[] }> {
+async function getFilteredAssets(statsPath: string, minSizeKb: number, excludePatternsStr: string | null): Promise<{ assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[] }> {
     console.log(`Reading stats file: ${statsPath}`);
     const statsFile = Bun.file(statsPath);
     if (!(await statsFile.exists())) {
@@ -86,14 +86,15 @@ async function getFilteredAssets(statsPath: string, filterSmall: boolean, exclud
 
     // --- Server-Side Filtering ---
     const excludeFilters = parseExcludePatterns(excludePatternsStr || '');
-    const minSize = 1024;
+    const minSizeBytes = minSizeKb * 1024; // Convert KB to Bytes
 
     assetsWithSize = assetsWithSize.filter(asset => {
         const size = asset.size ?? 0;
         const name = asset.name;
         let hidden = false;
 
-        if (filterSmall && size < minSize) {
+        // Filter by minimum size
+        if (size < minSizeBytes) {
             hidden = true;
         }
 
@@ -150,9 +151,9 @@ function generateTableBodyHtml(assets: WebpackAsset[]): string {
 }
 
 // Generates the full HTML page
-function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[], filterSmall: boolean, excludePatternsStr: string | null): string {
+function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[], minSizeKb: number, excludePatternsStr: string | null): string {
     const tableBodyContent = generateTableBodyHtml(assets);
-    const initialFilterSmallChecked = filterSmall ? 'checked' : '';
+    const initialMinSizeKbValue = minSizeKb; // Use the number directly
     const initialExcludePatternsValue = excludePatternsStr || '';
 
     // Escape initialExcludePatternsValue for embedding in HTML attribute and JS string
@@ -189,19 +190,20 @@ function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warning
 
         <!-- Filter Controls with HTMX -->
         <div class="mb-4 p-4 bg-gray-50 border border-gray-200 rounded flex flex-wrap gap-4 items-center">
-            <div class="flex items-center">
-                <input type="checkbox" id="filterSmall" name="filterSmall" ${initialFilterSmallChecked}
-                       class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2"
-                       hx-get="/"
-                       hx-trigger="change"
-                       hx-target="#asset-table-body"
-                       hx-swap="innerHTML"
-                       hx-include="[name='excludePatterns']"
-                       hx-indicator="#loading-indicator" />
-                <label for="filterSmall" class="text-sm text-gray-700">Hide assets &lt; 1KB</label>
+             <div class="flex items-center">
+                 <label for="minSizeKb" class="text-sm text-gray-700 mr-2">Hide assets <</label>
+                 <input type="number" id="minSizeKb" name="minSizeKb" value="${initialMinSizeKbValue}" min="0" step="0.1"
+                        class="w-20 px-2 py-1 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 mr-1"
+                        hx-get="/"
+                        hx-trigger="input changed delay:500ms, search"
+                        hx-target="#asset-table-body"
+                        hx-swap="innerHTML"
+                        hx-include="[name='excludePatterns'], [name='minSizeKb']"
+                        hx-indicator="#loading-indicator" />
+                 <span class="text-sm text-gray-700">KB</span>
             </div>
             <div class="flex-grow min-w-[200px]">
-                 <label for="excludePatterns" class="sr-only">Exclude patterns</label>
+                 <label for="excludePatterns" class="sr-only">Exclude patterns (comma-separated or /regex/)</label>
                  <input type="text" id="excludePatterns" name="excludePatterns" value="${escapedInitialExcludePatternsValueAttr}"
                         placeholder="Exclude patterns (e.g., node_modules/, .map$)"
                         class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
@@ -210,7 +212,7 @@ function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warning
                         hx-trigger="input changed delay:500ms, search"
                         hx-target="#asset-table-body"
                         hx-swap="innerHTML"
-                        hx-include="[name='filterSmall']"
+                        hx-include="[name='minSizeKb'], [name='excludePatterns']"
                         hx-indicator="#loading-indicator" />
             </div>
             <span id="loading-indicator" class="htmx-indicator ml-2 text-sm text-gray-500">Loading...</span>
@@ -245,25 +247,25 @@ function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warning
     <script>
         // LocalStorage Persistence Script
         document.addEventListener('DOMContentLoaded', () => {
-            const filterSmallCheckbox = document.getElementById('filterSmall');
+            const minSizeKbInput = document.getElementById('minSizeKb');
             const excludePatternsInput = document.getElementById('excludePatterns');
 
             // Load initial state from localStorage
-            const savedFilterSmall = localStorage.getItem('filterSmall') === 'true';
+            const savedMinSizeKb = localStorage.getItem('minSizeKb') || '1'; // Default to 1KB if not set
             const savedExcludePatterns = localStorage.getItem('excludePatterns') || '';
 
             // These variables hold the state rendered by the server based on URL params
-            const initialFilterSmall = ${filterSmall};
+            const initialMinSizeKb = ${initialMinSizeKbValue}; // Comes from server render
             const initialExcludePatterns = "${escapedInitialExcludePatternsValueJs}";
 
             let stateLoadedFromLocalStorage = false;
 
-            // Set checkbox state from localStorage if different from server render
-            if (filterSmallCheckbox && filterSmallCheckbox.checked !== savedFilterSmall) {
-                filterSmallCheckbox.checked = savedFilterSmall;
+            // Set min size input value from localStorage if different from server render
+            if (minSizeKbInput && minSizeKbInput.value !== savedMinSizeKb) {
+                minSizeKbInput.value = savedMinSizeKb;
                 stateLoadedFromLocalStorage = true;
             }
-            // Set input value from localStorage if different from server render
+            // Set exclude patterns input value from localStorage if different from server render
             if (excludePatternsInput && excludePatternsInput.value !== savedExcludePatterns) {
                 excludePatternsInput.value = savedExcludePatterns;
                 stateLoadedFromLocalStorage = true;
@@ -271,8 +273,8 @@ function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warning
 
             // Function to save state
             function saveState() {
-                if (filterSmallCheckbox) {
-                    localStorage.setItem('filterSmall', filterSmallCheckbox.checked);
+                if (minSizeKbInput) {
+                    localStorage.setItem('minSizeKb', minSizeKbInput.value);
                 }
                 if (excludePatternsInput) {
                     localStorage.setItem('excludePatterns', excludePatternsInput.value);
@@ -280,8 +282,8 @@ function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warning
             }
 
             // Add event listeners to save state on change
-            if (filterSmallCheckbox) {
-                filterSmallCheckbox.addEventListener('change', saveState);
+            if (minSizeKbInput) {
+                minSizeKbInput.addEventListener('input', saveState); // Use 'input' for number field
             }
             if (excludePatternsInput) {
                 excludePatternsInput.addEventListener('input', saveState);
@@ -292,12 +294,23 @@ function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warning
             if (stateLoadedFromLocalStorage) {
                 setTimeout(() => {
                     // Trigger the element that changed last, or a default one like the text input
+                    // Prefer triggering the one that actually loaded a different value
+                    let elementToTrigger = null;
                     if (excludePatternsInput && excludePatternsInput.value !== initialExcludePatterns) {
-                         htmx.trigger(excludePatternsInput, 'input'); // Use 'input' to respect delay
-                    } else if (filterSmallCheckbox && filterSmallCheckbox.checked !== initialFilterSmall) {
-                         htmx.trigger(filterSmallCheckbox, 'change');
+                        elementToTrigger = excludePatternsInput;
+                    } else if (minSizeKbInput && minSizeKbInput.value !== String(initialMinSizeKb)) { // Compare as string
+                        elementToTrigger = minSizeKbInput;
+                    }
+
+                    if (elementToTrigger) {
+                        console.log("State loaded from localStorage differs, triggering HTMX on:", elementToTrigger.id);
+                        htmx.trigger(elementToTrigger, 'input'); // Use 'input' to respect delay
+                    } else {
+                         console.log("State loaded from localStorage matches server render, no HTMX trigger needed.");
                     }
                 }, 100); // Small delay for safety
+            } else {
+                 console.log("Initial state matches localStorage, no HTMX trigger needed.");
             }
         });
     </script>
@@ -337,14 +350,14 @@ try {
             const isHxRequest = req.headers.get('HX-Request') === 'true';
 
             // Get filter params from URL
-            // Checkbox sends 'on' when checked, absent otherwise. Convert to boolean.
-            const filterSmall = url.searchParams.get('filterSmall') === 'on';
+            const minSizeKbParam = url.searchParams.get('minSizeKb');
+            const minSizeKb = Number.parseFloat(minSizeKbParam || '1'); // Default to 1KB if missing/invalid
             const excludePatterns = url.searchParams.get('excludePatterns'); // Keep as string | null
 
             if (url.pathname === '/') {
                 try {
                     // Always get the filtered assets based on URL params
-                    const { assets, warnings } = await getFilteredAssets(statsFilePath, filterSmall, excludePatterns);
+                    const { assets, warnings } = await getFilteredAssets(statsFilePath, Number.isNaN(minSizeKb) ? 1 : minSizeKb, excludePatterns); // Pass parsed number, default to 1 if NaN
 
                     if (isHxRequest) {
                         // Generate only the table body HTML
@@ -360,8 +373,8 @@ try {
                     }
                     // Generate the full page HTML (removed redundant else)
                     // console.log("Full Page Request - Returning Full HTML");
-                    // Corrected variable name from statsPath to statsFilePath
-                    const fullPageHtml = generateFullPageHtml(statsFilePath, assets, warnings, filterSmall, excludePatterns);
+                    // Pass the potentially adjusted minSizeKb value
+                    const fullPageHtml = generateFullPageHtml(statsFilePath, assets, warnings, Number.isNaN(minSizeKb) ? 1 : minSizeKb, excludePatterns);
                     return new Response(fullPageHtml, {
                         headers: {
                             'Content-Type': 'text/html',
