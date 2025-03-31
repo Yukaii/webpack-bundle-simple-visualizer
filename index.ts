@@ -107,12 +107,12 @@ async function generateAnalysisHtml(statsPath: string): Promise<string> {
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
-    <div class="container mx-auto bg-white p-6 rounded-lg shadow-md my-8"> {/* Added my-8 for spacing */}
+    <div class="container mx-auto bg-white p-6 rounded-lg shadow-md my-8"> <!-- Added my-8 for spacing -->
         <h1 class="text-2xl font-bold mb-4 text-gray-800">Webpack Bundle Analysis</h1>
         <p class="text-sm text-gray-600 mb-2">Generated: ${new Date().toLocaleString()}</p>
         <p class="text-sm text-gray-600 mb-4">Stats file: ${statsPath}</p>
 
-        {/* Filter Controls - Moved back to correct HTML location */}
+        <!-- Filter Controls -->
         <div class="mb-4 p-4 bg-gray-50 border border-gray-200 rounded flex flex-wrap gap-4 items-center">
             <div class="flex items-center">
                 <input type="checkbox" id="filterSmall" class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2" />
@@ -134,10 +134,10 @@ async function generateAnalysisHtml(statsPath: string): Promise<string> {
         ` : ''}
 
         <h2 class="text-xl font-semibold mb-3 text-gray-700">Asset Sizes</h2>
-        {/* Added max-h-[70vh] for vertical scroll */}
+        <!-- Added max-h-[70vh] for vertical scroll -->
         <div class="overflow-auto relative max-h-[70vh] border border-gray-200 rounded">
             <table class="min-w-full divide-y divide-gray-200">
-                {/* Added sticky top-0 z-10 bg-gray-50 */}
+                <!-- Added sticky top-0 z-10 bg-gray-50 -->
                 <thead class="sticky top-0 z-10 bg-gray-50">
                     <tr>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset Name</th>
