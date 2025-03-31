@@ -184,7 +184,6 @@
         </div>
     </div>
 
-    <!-- __INITIAL_DATA_PLACEHOLDER__ -->
     <script>
         const { createApp, ref, reactive, computed, onMounted, watch, defineComponent } = Vue;
 
@@ -227,7 +226,7 @@
                     warnings: [],
                     errors: []
                 });
-                const isExportMode = ref(typeof window.__INITIAL_DATA__ !== 'undefined');
+                // Removed isExportMode ref
                 const isLoading = ref(false);
                 const fetchError = ref(null); // For initial data load errors
 
@@ -249,13 +248,15 @@
 
                 // --- Computed Properties ---
                 const formattedGenerationTime = computed(() => {
+                    // Simplified: Always show current time if not loaded from config
                     return configData.generationTime
                         ? new Date(configData.generationTime).toLocaleString()
-                        : (isExportMode.value ? 'N/A' : new Date().toLocaleString()); // Fallback for serve mode if needed
+                        : new Date().toLocaleString();
                 });
 
                 const statsFilePathDisplay = computed(() => {
-                    return configData.statsFilePath || (isExportMode.value ? 'N/A (Embedded)' : (isLoading.value ? 'Loading...' : 'Error loading path'));
+                    // Simplified: Show loading/error or the path
+                    return configData.statsFilePath || (isLoading.value ? 'Loading...' : 'Error loading path');
                 });
 
                 const minSizeBytes = computed(() => (isNaN(minSizeKb.value) ? 0 : minSizeKb.value) * 1024);
@@ -349,14 +350,16 @@
                     // For true recursion, this would need to process the stats data
                     // to build a hierarchical structure (e.g., modules with children based on reasons/issuers).
                     // This is complex and depends heavily on the stats format details.
-                    // For now, it returns the same flat list, which the recursive component
-                    // will render without actual nesting.
+                    // This function is now only used in export mode, which is removed.
+                    // Keeping the function definition but it won't be called.
+                    // Or we can remove it entirely if preferred. Let's remove it for cleanliness.
+                    console.warn("getModulesForAssetClientSide called unexpectedly in serve-only mode.");
+                    return [];
+                    /* Original logic removed as it depended on fullStatsData
                     if (!fullStatsData.value || !Array.isArray(fullStatsData.value.assets)) return [];
 
                     const asset = fullStatsData.value.assets.find(a => a.name === assetName);
-                    // Simplified check: Ensure chunks and modules arrays exist if needed
                     if (!asset || !Array.isArray(asset.chunks) || (!Array.isArray(fullStatsData.value.chunks) && !Array.isArray(fullStatsData.value.modules))) return [];
-
 
                     const relevantChunkIds = new Set(asset.chunks);
                     const relevantModules = new Set(); // Use Set to avoid duplicates and simplify logic
@@ -375,10 +378,10 @@
                         });
                     }
 
-                    // Fallback or primary source: Check top-level modules
+                    // Fallback or primary source: Check top-level modules - Removed
+                    /*
                     if (Array.isArray(fullStatsData.value.modules)) {
                          fullStatsData.value.modules.forEach(module => {
-                             // Check if module belongs to one of the asset's chunks
                              if (Array.isArray(module.chunks) && module.chunks.some(chunkId => relevantChunkIds.has(chunkId))) {
                                  // Add the module object if it's not already present from chunk processing
                                  if (typeof module === 'object' && module !== null) {
@@ -394,11 +397,10 @@
                              }
                          });
                      }
+                    */
 
-
-                    // Convert Set to array and sort
-                    // Note: This still returns a flat list. The recursive component handles rendering.
-                    return Array.from(relevantModules).sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
+                    // Convert Set to array and sort - Removed
+                    // return Array.from(relevantModules).sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
                 }
 
 
@@ -410,17 +412,12 @@
                     selectedAssetModules.value = [];
 
                     try {
-                        let modules = [];
-                        if (isExportMode.value) {
-                            modules = getModulesForAssetClientSide(assetName);
-                        } else {
-                            const response = await fetch(`/api/asset-details/${encodeURIComponent(assetName)}`);
-                            if (!response.ok) {
-                                throw new Error(`Failed to fetch details: ${response.status} ${response.statusText}`);
-                            }
-                            // Assuming the API returns the same flat structure for now
-                            modules = await response.json();
+                        // Always fetch from API now
+                        const response = await fetch(`/api/asset-details/${encodeURIComponent(assetName)}`);
+                        if (!response.ok) {
+                            throw new Error(`Failed to fetch details: ${response.status} ${response.statusText}`);
                         }
+                        const modules = await response.json();
                         selectedAssetModules.value = modules; // Assign fetched modules
                         // Calculate max size for the newly fetched modules
                         maxModuleSizeInModal.value = Math.max(0, ...(modules.map(m => m.size ?? 0)));
@@ -455,57 +452,37 @@
 
                 // --- Lifecycle Hooks ---
                 onMounted(async () => {
-                    console.log(`Running in ${isExportMode.value ? 'Export' : 'Serve'} mode.`);
+                    // Simplified: Always run in "Serve" mode logic
+                    console.log(`Running in Serve mode.`);
                     isLoading.value = true;
                     fetchError.value = null;
 
-                    if (isExportMode.value) {
-                        try {
-                            fullStatsData.value = window.__INITIAL_DATA__ || {};
-                            // Assign directly to reactive properties
-                            Object.assign(configData, {
-                                generationTime: fullStatsData.value.generationTime,
-                                statsFilePath: fullStatsData.value.statsFilePath,
-                                warnings: fullStatsData.value.warnings || [],
-                                errors: fullStatsData.value.errors || []
-                            });
-                            allAssets.value = fullStatsData.value.assets || [];
-                        } catch (e) {
-                            console.error("Error processing embedded data:", e);
-                            fetchError.value = "Error processing embedded data";
-                             Object.assign(configData, { warnings: [], errors: [{ message: 'Failed to process embedded data' }] });
-                             allAssets.value = [];
-                        } finally {
-                             isLoading.value = false;
-                        }
-                    } else {
-                        // Serve mode: Fetch config, then assets
-                        let fetchedConfig = {};
-                        try {
-                            const configResponse = await fetch('/api/config');
-                            if (!configResponse.ok) throw new Error(`Config fetch failed: ${configResponse.status}`);
-                            fetchedConfig = await configResponse.json();
-                            Object.assign(configData, fetchedConfig); // Update configData
+                    // Fetch config, then assets
+                    let fetchedConfig = {};
+                    try {
+                        const configResponse = await fetch('/api/config');
+                        if (!configResponse.ok) throw new Error(`Config fetch failed: ${configResponse.status}`);
+                        fetchedConfig = await configResponse.json();
+                        Object.assign(configData, fetchedConfig); // Update configData
 
-                            const tableResponse = await fetch('/api/table');
-                            if (!tableResponse.ok) throw new Error(`Table fetch failed: ${tableResponse.status}`);
-                            const assets = await tableResponse.json();
-                            if (assets.error) throw new Error(`API Error: ${assets.error}`);
-                            allAssets.value = assets;
+                        const tableResponse = await fetch('/api/table');
+                        if (!tableResponse.ok) throw new Error(`Table fetch failed: ${tableResponse.status}`);
+                        const assets = await tableResponse.json();
+                        if (assets.error) throw new Error(`API Error: ${assets.error}`);
+                        allAssets.value = assets;
 
-                        } catch (error) {
-                            console.error('Error fetching data in serve mode:', error);
-                            fetchError.value = error.message || String(error);
-                            // Update config with error state
-                            Object.assign(configData, {
-                                statsFilePath: 'Error loading path',
-                                warnings: configData.warnings || [], // Keep existing warnings if any
-                                errors: [...(configData.errors || []), { message: `Failed to load data: ${fetchError.value}` }]
-                            });
-                            allAssets.value = [];
-                        } finally {
-                            isLoading.value = false;
-                        }
+                    } catch (error) {
+                        console.error('Error fetching data:', error);
+                        fetchError.value = error.message || String(error);
+                        // Update config with error state
+                        Object.assign(configData, {
+                            statsFilePath: 'Error loading path',
+                            warnings: configData.warnings || [], // Keep existing warnings if any
+                            errors: [...(configData.errors || []), { message: `Failed to load data: ${fetchError.value}` }]
+                        });
+                        allAssets.value = [];
+                    } finally {
+                        isLoading.value = false;
                     }
                 });
 

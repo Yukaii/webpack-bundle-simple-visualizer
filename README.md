@@ -14,7 +14,6 @@ This tool provides a user interface to inspect asset sizes, filter them based on
     *   Exclude assets matching specific string patterns or regular expressions (e.g., `node_modules/`, `/\.map$/`).
 *   **Warnings & Errors:** Displays any warnings or errors captured in the `stats.json` file.
 *   **Multi-Compiler Support:** Handles stats files generated from multi-compiler webpack configurations (uses the first child compilation).
-*   **Export Report:** Generate a standalone HTML report with embedded data for offline viewing.
 
 ## Prerequisites
 
@@ -29,8 +28,6 @@ This tool provides a user interface to inspect asset sizes, filter them based on
     ```
 
 ## Usage
-
-The tool provides two main commands: `serve` and `export`.
 
 1.  **Generate Stats File:** Generate a `stats.json` file using the webpack CLI. The `--profile` flag is recommended to include detailed module information, though not strictly required by this tool.
 
@@ -61,35 +58,14 @@ The tool provides two main commands: `serve` and `export`.
 
     Then, open your web browser and navigate to `http://localhost:<port>` (e.g., `http://localhost:3000`).
 
-3.  **Generate Standalone Report (`export` command):**
-    Use the `export` command via `bun run index.ts`, providing the path to your stats file. You can optionally specify an output file path using the `--output` or `-o` flag (defaults to `webpack-bundle-visualizer-report.html`).
-
-    ```bash
-    bun run index.ts export <path_to_your_stats.json> [--output <path>]
-    ```
-
-    *   **`<path_to_your_stats.json>`:** Replace this with the actual path to your stats file.
-    *   **`--output <path>` or `-o <path>`:** (Optional) Specify the path where the HTML report file should be saved.
-
-    **Examples:**
-    ```bash
-    # Export using the default output file name
-    bun run index.ts export ./stats.json
-
-    # Export to a specific file name
-    bun run index.ts export ./stats.json -o my-report.html
-    ```
-    This will generate a single HTML file containing the visualization and all necessary data. You can open this file directly in your browser.
-
-4.  **Getting Help:**
+3.  **Getting Help:**
     You can see help information for the tool and its commands:
     ```bash
     bun run index.ts --help
     bun run index.ts serve --help
-    bun run index.ts export --help
     ```
 
-## Interface Guide (for `serve` mode and exported report)
+## Interface Guide
 
 *   **Stats File Path:** Displays the path of the stats file being analyzed.
 *   **Filter Controls:**

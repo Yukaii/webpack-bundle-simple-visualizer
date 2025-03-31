@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs'; // Removed writeFileSync
 import path from 'node:path';
 import type { BunRequest } from 'bun';
 import { Command } from 'commander';
@@ -361,89 +361,6 @@ program.command('serve')
             // Check if it's an error object before accessing message
             const errorMessage = error instanceof Error ? error.message : String(error);
             console.error("Failed to start server:", errorMessage);
-            process.exit(1);
-        }
-    }); // Removed trailing }); here
-
-// --- Export Command ---
-program.command('export')
-    .description('Generate a standalone HTML report with embedded native stats data')
-    .argument('<stats_file_path>', 'Path to the native webpack stats JSON file')
-    .option('-o, --output <path>', 'Output HTML file path', 'webpack-bundle-visualizer-report.html')
-    .action(async (statsFilePathArg, options) => {
-        const statsFilePath = path.resolve(statsFilePathArg);
-        const outputFilePath = path.resolve(options.output);
-        const templateHtmlPath = path.join(import.meta.dir, 'public', 'index.html');
-
-        console.log(`Exporting analysis for: ${statsFilePath}`);
-        console.log(`Outputting to: ${outputFilePath}`);
-
-        if (!existsSync(statsFilePath)) {
-             console.error(`Error: Stats file not found at "${statsFilePath}"`);
-             process.exit(1);
-        }
-
-        try {
-            // 1. Get Stats Data
-            // We only strictly need assets/warnings/errors for the *initial* embed
-            // Module data could be fetched on demand if the report gets too large,
-            // but for simplicity now, we'll embed everything like the serve command prepares.
-            const { statsData, statsFilePath: resolvedStatsPath } = await getWebpackStatsData(statsFilePath);
-            const assets = statsData.assets || [];
-            const warnings = statsData.warnings || [];
-            const errors = statsData.errors || [];
-            // Decide whether to embed full module data or just basics
-            const embedFullData = true; // Set to false to only embed basics
-
-            // 2. Read HTML Template
-            const templateHtml = readFileSync(templateHtmlPath, 'utf-8');
-
-            // 3. Prepare Data for Injection
-            const initialData = embedFullData
-                ? { // Embed everything needed for client-side rendering without API calls
-                    statsFilePath: resolvedStatsPath,
-                    assets: assets,
-                    warnings: warnings,
-                    errors: errors,
-                    modules: statsData.modules || [], // Embed modules
-                    chunks: statsData.chunks || [],   // Embed chunks
-                    generationTime: new Date().toISOString(),
-                    isExport: true // Flag for client-side logic
-                  }
-                : { // Embed only basic info, client would need API (not implemented for export)
-                    statsFilePath: resolvedStatsPath,
-                    assets: assets,
-                    warnings: warnings,
-                    errors: errors,
-                    generationTime: new Date().toISOString(),
-                    isExport: true
-                  };
-
-            // Use JSON.stringify. Be mindful of potentially very large stats files.
-            // Consider alternative embedding/loading strategies for huge files if needed.
-            let dataScript = '';
-            try {
-                 dataScript = `<script id="initial-data">window.__INITIAL_DATA__ = ${JSON.stringify(initialData)};</script>`;
-            } catch (stringifyError) {
-                 console.error("Error stringifying initial data for export:", stringifyError);
-                 throw new Error("Failed to serialize stats data for HTML export. The stats file might be too large or contain circular references.");
-            }
-
-
-            // 4. Inject Data into Template
-            const outputHtml = templateHtml.replace('<!-- __INITIAL_DATA_PLACEHOLDER__ -->', dataScript);
-
-            // 5. Write Output File
-            writeFileSync(outputFilePath, outputHtml);
-            console.log(`✅ Report successfully generated: ${outputFilePath}`);
-            if (warnings.length > 0) console.warn(`Note: ${warnings.length} warnings included in the report.`);
-            if (errors.length > 0) console.error(`Error: ${errors.length} errors included in the report.`);
-
-
-        } catch (error: unknown) { // Add type unknown
-             // Catch errors from getWebpackStatsData or file operations
-             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error("Error during export:", errorMessage);
             process.exit(1);
         }
     }); // Removed trailing }); here
