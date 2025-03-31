@@ -17,65 +17,150 @@ interface WebpackStats {
   endTime: number;
 }
 
+// --- Utility Functions ---
+
 function formatBytes(bytes: number, decimals = 2): string {
     if (!Number.isFinite(bytes) || bytes < 0) return 'N/A'; // Handle non-finite or negative numbers
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
     const dm = decimals < 0 ? 0 : decimals;
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    // Ensure i is within the bounds of the sizes array
     const i = Math.max(0, Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1));
-    // Use Number.parseFloat, template literal, and ** operator
     return `${Number.parseFloat((bytes / (k ** i)).toFixed(dm))} ${sizes[i]}`;
 }
 
-// Modified to return HTML content instead of writing to file
-async function generateAnalysisHtml(statsPath: string): Promise<string> {
-  console.log(`Reading stats file: ${statsPath}`);
-  const statsFile = Bun.file(statsPath);
-  if (!(await statsFile.exists())) {
-    console.error(`Error: Stats file not found at ${statsPath}`);
-    // Instead of exiting, throw an error to be caught by the caller
-    throw new Error(`Stats file not found at ${statsPath}`);
-  }
+// Shared pattern parsing logic (used by server-side filtering)
+function parseExcludePatterns(patternsString: string): (RegExp | string)[] {
+    if (!patternsString) { return []; }
+    return patternsString.split(',')
+        .map(p => p.trim())
+        .filter(p => p) // Remove empty strings
+        .map(p => {
+            if (p.startsWith('/') && p.endsWith('/')) {
+                try {
+                    return new RegExp(p.slice(1, -1));
+                } catch (e) {
+                    console.warn(`Invalid regex pattern ignored: ${p}`, e); // Use template literal
+                    return null;
+                }
+            }
+            return p;
+        })
+        .filter((p): p is RegExp | string => p !== null);
+}
 
-  let stats: WebpackStats;
-  try {
-    stats = await statsFile.json();
-  } catch (error) {
-    console.error(`Error parsing JSON from ${statsPath}:`, error);
-    throw new Error(`Error parsing JSON from ${statsPath}: ${error}`);
-  }
+// --- Core Data Processing and Filtering ---
 
-  console.log('Augmenting assets with file sizes...');
-  const assetsWithWarnings: { asset: WebpackAsset, warning: string }[] = [];
-  const assetPromises = Object.values(stats.assets).map(async (asset) => {
-    // Resolve the asset path relative to the stats file location
-    const absoluteAssetPath = path.resolve(path.dirname(statsPath), asset.path);
-
-    if (existsSync(absoluteAssetPath)) {
-      const file = Bun.file(absoluteAssetPath);
-      // TODO: Investigate TS error 'Property 'size' does not exist on type 'BunFile'' - casting to any as workaround
-      // biome-ignore lint/suspicious/noExplicitAny: BunFile type definition seems incomplete, size property exists at runtime.
-      asset.size = (file as any).size; // Bun.file().size returns size in bytes
-    } else {
-      const warning = `Asset file not found at ${absoluteAssetPath} (referenced by ${asset.name}). Size set to 0.`;
-      console.warn(`Warning: ${warning}`);
-      assetsWithWarnings.push({ asset, warning });
-      asset.size = 0; // Treat missing files as 0 size for sorting/display
+async function getFilteredAssets(statsPath: string, filterSmall: boolean, excludePatternsStr: string | null): Promise<{ assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[] }> {
+    console.log(`Reading stats file: ${statsPath}`);
+    const statsFile = Bun.file(statsPath);
+    if (!(await statsFile.exists())) {
+        throw new Error(`Stats file not found at ${statsPath}`);
     }
-    return asset;
-  });
 
-  const assetsWithSize = await Promise.all(assetPromises);
+    let stats: WebpackStats;
+    try {
+        stats = await statsFile.json();
+    } catch (error) {
+        throw new Error(`Error parsing JSON from ${statsPath}: ${error}`);
+    }
 
-  // Sort assets by size descending
-  assetsWithSize.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
-  const maxSize = Math.max(...assetsWithSize.map(a => a.size ?? 0)); // Calculate maxSize once
+    console.log('Augmenting assets with file sizes...');
+    const assetsWithWarnings: { asset: WebpackAsset, warning: string }[] = [];
+    const assetPromises = Object.values(stats.assets).map(async (asset) => {
+        const absoluteAssetPath = path.resolve(path.dirname(statsPath), asset.path);
+        if (existsSync(absoluteAssetPath)) {
+            const file = Bun.file(absoluteAssetPath);
+            // biome-ignore lint/suspicious/noExplicitAny: BunFile type definition seems incomplete
+            asset.size = (file as any).size;
+        } else {
+            const warning = `Asset file not found at ${absoluteAssetPath} (referenced by ${asset.name}). Size set to 0.`;
+            console.warn(`Warning: ${warning}`);
+            assetsWithWarnings.push({ asset, warning });
+            asset.size = 0;
+        }
+        return asset;
+    });
 
-  // --- Generate HTML ---
-  // Using backticks for the template literal
-  const htmlContent = `
+    let assetsWithSize = await Promise.all(assetPromises);
+
+    // --- Server-Side Filtering ---
+    const excludeFilters = parseExcludePatterns(excludePatternsStr || '');
+    const minSize = 1024;
+
+    assetsWithSize = assetsWithSize.filter(asset => {
+        const size = asset.size ?? 0;
+        const name = asset.name;
+        let hidden = false;
+
+        if (filterSmall && size < minSize) {
+            hidden = true;
+        }
+
+        if (!hidden && excludeFilters.length > 0) {
+            for (const filter of excludeFilters) {
+                if (filter instanceof RegExp) {
+                    if (filter.test(name)) { hidden = true; break; }
+                } else if (typeof filter === 'string') {
+                    if (name.includes(filter)) { hidden = true; break; }
+                }
+            }
+        }
+        return !hidden;
+    });
+    // --- End Server-Side Filtering ---
+
+    // Sort remaining assets
+    assetsWithSize.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
+
+    return { assets: assetsWithSize, warnings: assetsWithWarnings };
+}
+
+
+// --- HTML Generation Functions ---
+
+// Generates only the <tbody> inner HTML
+function generateTableBodyHtml(assets: WebpackAsset[]): string {
+    if (assets.length === 0) {
+        return `
+        <tr>
+            <td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td>
+        </tr>
+        `;
+    }
+
+    const maxSize = Math.max(...assets.map(a => a.size ?? 0));
+
+    return assets.map(asset => {
+        const sizeBytes = asset.size ?? 0;
+        const formattedSize = formatBytes(sizeBytes);
+        const percentage = maxSize > 0 ? ((sizeBytes / maxSize) * 100).toFixed(1) : 0;
+        return `
+        <tr data-size-bytes="${sizeBytes}" data-asset-name="${asset.name}">
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 break-all">${asset.name}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">${formattedSize}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" title="${percentage}% of largest asset">
+                  <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${percentage}%"></div>
+                </div>
+            </td>
+        </tr>
+        `;
+    }).join('');
+}
+
+// Generates the full HTML page
+function generateFullPageHtml(statsPath: string, assets: WebpackAsset[], warnings: { asset: WebpackAsset, warning: string }[], filterSmall: boolean, excludePatternsStr: string | null): string {
+    const tableBodyContent = generateTableBodyHtml(assets);
+    const initialFilterSmallChecked = filterSmall ? 'checked' : '';
+    const initialExcludePatternsValue = excludePatternsStr || '';
+
+    // Escape initialExcludePatternsValue for embedding in HTML attribute and JS string
+    const escapedInitialExcludePatternsValueAttr = initialExcludePatternsValue.replace(/"/g, '&quot;');
+    const escapedInitialExcludePatternsValueJs = initialExcludePatternsValue.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+
+    return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -83,61 +168,66 @@ async function generateAnalysisHtml(statsPath: string): Promise<string> {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Webpack Bundle Analysis</title>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/htmx/2.0.4/htmx.min.js" crossorigin="anonymous"></script>
     <style>
-      /* Add styles for hidden rows */
       .hidden-row { display: none; }
-      /* Ensure body padding doesn't interfere with sticky header */
       body { padding-top: 0 !important; }
-      /* Custom scrollbar styling (optional) */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+      ::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
+      ::-webkit-scrollbar-thumb:hover { background: #555; }
+      .htmx-indicator{ display:none; }
+      .htmx-request .htmx-indicator{ display:inline; }
+      .htmx-request.htmx-indicator{ display:inline; }
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
-    <div class="container mx-auto bg-white p-6 rounded-lg shadow-md my-8"> <!-- Added my-8 for spacing -->
+    <div class="container mx-auto bg-white p-6 rounded-lg shadow-md my-8">
         <h1 class="text-2xl font-bold mb-4 text-gray-800">Webpack Bundle Analysis</h1>
         <p class="text-sm text-gray-600 mb-2">Generated: ${new Date().toLocaleString()}</p>
         <p class="text-sm text-gray-600 mb-4">Stats file: ${statsPath}</p>
 
-        <!-- Filter Controls -->
+        <!-- Filter Controls with HTMX -->
         <div class="mb-4 p-4 bg-gray-50 border border-gray-200 rounded flex flex-wrap gap-4 items-center">
             <div class="flex items-center">
-                <input type="checkbox" id="filterSmall" class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2" />
+                <input type="checkbox" id="filterSmall" name="filterSmall" ${initialFilterSmallChecked}
+                       class="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-2"
+                       hx-get="/"
+                       hx-trigger="change"
+                       hx-target="#asset-table-body"
+                       hx-swap="innerHTML"
+                       hx-include="[name='excludePatterns']"
+                       hx-indicator="#loading-indicator" />
                 <label for="filterSmall" class="text-sm text-gray-700">Hide assets &lt; 1KB</label>
             </div>
             <div class="flex-grow min-w-[200px]">
                  <label for="excludePatterns" class="sr-only">Exclude patterns</label>
-                 <input type="text" id="excludePatterns" placeholder="Exclude patterns (e.g., node_modules/, .map$)" class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500" title="Comma-separated list of strings or /regex/ patterns to exclude" />
+                 <input type="text" id="excludePatterns" name="excludePatterns" value="${escapedInitialExcludePatternsValueAttr}"
+                        placeholder="Exclude patterns (e.g., node_modules/, .map$)"
+                        class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                        title="Comma-separated list of strings or /regex/ patterns to exclude"
+                        hx-get="/"
+                        hx-trigger="input changed delay:500ms, search"
+                        hx-target="#asset-table-body"
+                        hx-swap="innerHTML"
+                        hx-include="[name='filterSmall']"
+                        hx-indicator="#loading-indicator" />
             </div>
+            <span id="loading-indicator" class="htmx-indicator ml-2 text-sm text-gray-500">Loading...</span>
         </div>
 
-        ${assetsWithWarnings.length > 0 ? `
+        ${warnings.length > 0 ? `
         <div class="mb-4 p-4 bg-yellow-100 border border-yellow-300 rounded">
             <h2 class="font-semibold text-yellow-800 mb-2">Warnings:</h2>
             <ul class="list-disc list-inside text-sm text-yellow-700">
-                ${assetsWithWarnings.map(item => `<li>${item.warning}</li>`).join('')}
+                ${warnings.map(item => `<li>${item.warning}</li>`).join('')}
             </ul>
         </div>
         ` : ''}
 
         <h2 class="text-xl font-semibold mb-3 text-gray-700">Asset Sizes</h2>
-        <!-- Added max-h-[70vh] for vertical scroll -->
         <div class="overflow-auto relative max-h-[70vh] border border-gray-200 rounded">
             <table class="min-w-full divide-y divide-gray-200">
-                <!-- Added sticky top-0 z-10 bg-gray-50 -->
                 <thead class="sticky top-0 z-10 bg-gray-50">
                     <tr>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset Name</th>
@@ -145,138 +235,90 @@ async function generateAnalysisHtml(statsPath: string): Promise<string> {
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Visualization</th>
                     </tr>
                 </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
-                    ${assetsWithSize.length === 0 ? `
-                    <tr>
-                        <td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets found in stats file.</td>
-                    </tr>
-                    ` : assetsWithSize.map(asset => {
-                        const sizeBytes = asset.size ?? 0;
-                        const formattedSize = formatBytes(sizeBytes);
-                        // Use pre-calculated maxSize
-                        const percentage = maxSize > 0 ? ((sizeBytes / maxSize) * 100).toFixed(1) : 0;
-                        // Add data attributes for filtering
-                        return `
-                    <tr data-size-bytes="${sizeBytes}" data-asset-name="${asset.name}">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 break-all">${asset.name}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">${formattedSize}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" title="${percentage}% of largest asset">
-                              <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${percentage}%"></div>
-                            </div>
-                        </td>
-                    </tr>
-                        `;
-                    }).join('')}
+                <tbody id="asset-table-body" class="bg-white divide-y divide-gray-200">
+                    ${tableBodyContent} <!-- Initial table body -->
                 </tbody>
             </table>
         </div>
     </div>
 
     <script>
-        // Ensure script runs after DOM is loaded
+        // LocalStorage Persistence Script
         document.addEventListener('DOMContentLoaded', () => {
-            const filterSmallCheckbox = document.getElementById('filterSmall'); // No need for TS cast here
-            const excludePatternsInput = document.getElementById('excludePatterns'); // No need for TS cast here
-            const tableBody = document.querySelector('table tbody');
+            const filterSmallCheckbox = document.getElementById('filterSmall');
+            const excludePatternsInput = document.getElementById('excludePatterns');
 
-            // Check if elements exist before proceeding
-            if (!filterSmallCheckbox || !excludePatternsInput || !tableBody) {
-                console.error("Filter controls or table body not found!");
-                return;
+            // Load initial state from localStorage
+            const savedFilterSmall = localStorage.getItem('filterSmall') === 'true';
+            const savedExcludePatterns = localStorage.getItem('excludePatterns') || '';
+
+            // These variables hold the state rendered by the server based on URL params
+            const initialFilterSmall = ${filterSmall};
+            const initialExcludePatterns = "${escapedInitialExcludePatternsValueJs}";
+
+            let stateLoadedFromLocalStorage = false;
+
+            // Set checkbox state from localStorage if different from server render
+            if (filterSmallCheckbox && filterSmallCheckbox.checked !== savedFilterSmall) {
+                filterSmallCheckbox.checked = savedFilterSmall;
+                stateLoadedFromLocalStorage = true;
             }
-            const tableRows = tableBody.querySelectorAll('tr');
-
-            // Standard JS function, no TS annotations needed inside script tag
-            function parseExcludePatterns(patternsString) {
-                if (!patternsString) { return []; }
-                return patternsString.split(',')
-                    .map(p => p.trim())
-                    .filter(p => p) // Remove empty strings
-                    .map(p => {
-                        // Check if it looks like a regex (starts and ends with /)
-                        if (p.startsWith('/') && p.endsWith('/')) {
-                            try {
-                                // Attempt to create a RegExp object, removing the slashes
-                                return new RegExp(p.slice(1, -1));
-                            } catch (e) {
-                                console.warn('Invalid regex pattern ignored: ' + p, e);
-                                return null; // Ignore invalid regex
-                            }
-                        }
-                        // Otherwise, treat as a simple string includes check
-                        return p;
-                    })
-                    .filter(p => p !== null); // Simplified filter
+            // Set input value from localStorage if different from server render
+            if (excludePatternsInput && excludePatternsInput.value !== savedExcludePatterns) {
+                excludePatternsInput.value = savedExcludePatterns;
+                stateLoadedFromLocalStorage = true;
             }
 
-            function filterAssets() {
-                // Add null checks again just in case
-                if (!filterSmallCheckbox || !excludePatternsInput || !tableBody) { return; }
+            // Function to save state
+            function saveState() {
+                if (filterSmallCheckbox) {
+                    localStorage.setItem('filterSmall', filterSmallCheckbox.checked);
+                }
+                if (excludePatternsInput) {
+                    localStorage.setItem('excludePatterns', excludePatternsInput.value);
+                }
+            }
 
-                const filterSmall = filterSmallCheckbox.checked;
-                const excludePatternsRaw = excludePatternsInput.value;
-                const excludeFilters = parseExcludePatterns(excludePatternsRaw);
-                const minSize = 1024; // 1KB
+            // Add event listeners to save state on change
+            if (filterSmallCheckbox) {
+                filterSmallCheckbox.addEventListener('change', saveState);
+            }
+            if (excludePatternsInput) {
+                excludePatternsInput.addEventListener('input', saveState);
+            }
 
-                tableRows.forEach(row => {
-                    // Ensure row is an HTMLElement to access dataset
-                    if (!(row instanceof HTMLElement)) return;
-
-                    let size = Number.parseInt(row.dataset.sizeBytes || '0', 10);
-                    if (Number.isNaN(size)) { size = 0; } // Ensure size is a number
-                    const name = row.dataset.assetName || '';
-                    let hidden = false;
-
-                    // Check size filter
-                    if (filterSmall && size < minSize) {
-                        hidden = true;
+            // If we loaded different state from localStorage, trigger HTMX to fetch corresponding table body
+            // We need to ensure HTMX is initialized, using a small timeout is a pragmatic way
+            if (stateLoadedFromLocalStorage) {
+                setTimeout(() => {
+                    // Trigger the element that changed last, or a default one like the text input
+                    if (excludePatternsInput && excludePatternsInput.value !== initialExcludePatterns) {
+                         htmx.trigger(excludePatternsInput, 'input'); // Use 'input' to respect delay
+                    } else if (filterSmallCheckbox && filterSmallCheckbox.checked !== initialFilterSmall) {
+                         htmx.trigger(filterSmallCheckbox, 'change');
                     }
-
-                    // Check exclude patterns only if not already hidden by size
-                    if (!hidden && excludeFilters.length > 0) {
-                        for (const filter of excludeFilters) {
-                            if (filter instanceof RegExp) {
-                                if (filter.test(name)) {
-                                    hidden = true;
-                                    break; // Stop checking patterns if one matches
-                                }
-                            } else if (typeof filter === 'string') {
-                                if (name.includes(filter)) {
-                                    hidden = true;
-                                    break; // Stop checking patterns if one matches
-                                }
-                            }
-                        }
-                    }
-
-                    // Apply visibility
-                    if (hidden) {
-                        row.classList.add('hidden-row');
-                    } else {
-                        row.classList.remove('hidden-row');
-                    }
-                });
-            } // Removed semicolon here, not needed after function block
-
-            // Add event listeners
-            filterSmallCheckbox.addEventListener('input', filterAssets);
-            excludePatternsInput.addEventListener('input', filterAssets);
-
-            // Initial filter application on load
-            filterAssets(); // Removed semicolon here, not needed after function call
+                }, 100); // Small delay for safety
+            }
         });
     </script>
 </body>
 </html>
-`; // End of template literal
-
-  return htmlContent;
+`;
 }
 
-// --- Configuration ---
+
+// --- Server Configuration & Execution ---
+
 const statsFilePath = process.argv[2];
-const port = Number.parseInt(process.argv[3] || '3000', 10); // Default port 3000
+const port = Number.parseInt(process.argv[3] || '3000', 10);
+const allowedOrigin = process.env.ALLOWED_ORIGIN || '*'; // Read from env, default to '*'
+
+if (allowedOrigin === '*') {
+    console.warn("Warning: ALLOWED_ORIGIN environment variable not set. Defaulting to allowing all origins ('*'). For production, set this to your specific frontend origin (e.g., 'http://localhost:8080').");
+} else {
+    console.log(`Allowing requests from origin: ${allowedOrigin}`);
+}
+
 
 if (!statsFilePath) {
     console.error("Error: Please provide the path to the webpack stats JSON file.");
@@ -284,29 +326,86 @@ if (!statsFilePath) {
     process.exit(1);
 }
 
-// --- Run Analysis and Start Server ---
 console.log(`Attempting to analyze bundle: ${statsFilePath}`);
 
 try {
-    // Generate the HTML content once on startup
-    const analysisHtml = await generateAnalysisHtml(statsFilePath);
-    console.log("Bundle analysis complete. Starting server...");
-
     const server = Bun.serve({
         port: port,
-        hostname: 'localhost', // Explicitly set hostname
-        fetch(req): Response | Promise<Response> {
+        hostname: 'localhost',
+        async fetch(req): Promise<Response> {
             const url = new URL(req.url);
+            const isHxRequest = req.headers.get('HX-Request') === 'true';
+
+            // Get filter params from URL
+            // Checkbox sends 'on' when checked, absent otherwise. Convert to boolean.
+            const filterSmall = url.searchParams.get('filterSmall') === 'on';
+            const excludePatterns = url.searchParams.get('excludePatterns'); // Keep as string | null
+
             if (url.pathname === '/') {
-                return new Response(analysisHtml, {
-                    headers: { 'Content-Type': 'text/html' },
-                });
+                try {
+                    // Always get the filtered assets based on URL params
+                    const { assets, warnings } = await getFilteredAssets(statsFilePath, filterSmall, excludePatterns);
+
+                    if (isHxRequest) {
+                        // Generate only the table body HTML
+                        const tableBodyHtml = generateTableBodyHtml(assets);
+                        // Use htmx.logAll() in browser console to debug headers
+                        // console.log("HTMX Request - Returning Table Body");
+                        return new Response(tableBodyHtml, {
+                            headers: {
+                                'Content-Type': 'text/html',
+                                'Access-Control-Allow-Origin': allowedOrigin // Use dynamic origin
+                            }
+                        });
+                    }
+                    // Generate the full page HTML (removed redundant else)
+                    // console.log("Full Page Request - Returning Full HTML");
+                    // Corrected variable name from statsPath to statsFilePath
+                    const fullPageHtml = generateFullPageHtml(statsFilePath, assets, warnings, filterSmall, excludePatterns);
+                    return new Response(fullPageHtml, {
+                        headers: {
+                            'Content-Type': 'text/html',
+                            'Access-Control-Allow-Origin': allowedOrigin // Use dynamic origin
+                        }
+                    });
+
+                } catch (error) {
+                     console.error("Error during request processing:", error);
+                     const errorMsg = error instanceof Error ? error.message : 'An unknown error occurred';
+                     const status = errorMsg.includes('Stats file not found') ? 404 : 500;
+
+                     if (isHxRequest) {
+                         // Return error message within table structure for HTMX
+                         return new Response(`<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: ${errorMsg}</td></tr>`, {
+                             status: status,
+                             headers: {
+                                 'Content-Type': 'text/html',
+                                 'Access-Control-Allow-Origin': allowedOrigin // Use dynamic origin
+                             }
+                         });
+                     }
+                     // Return a simple full error page (removed redundant else)
+                     return new Response(`<html><body><h1>Error</h1><p>${errorMsg}</p></body></html>`, {
+                         status: status,
+                         headers: {
+                             'Content-Type': 'text/html',
+                             'Access-Control-Allow-Origin': allowedOrigin // Use dynamic origin
+                         }
+                     });
+                }
             }
-            // Fallback for any other path
-            return new Response('Not Found', { status: 404 });
+
+            // Fallback for any other path (removed redundant else)
+            return new Response('Not Found', {
+                status: 404,
+                headers: {
+                    'Access-Control-Allow-Origin': allowedOrigin // Use dynamic origin for 404s too
+                }
+             });
         },
         error(error: Error): Response | Promise<Response> {
-            console.error("Server error:", error);
+            // This catches errors during server startup or connection issues
+            console.error("Server startup/connection error:", error);
             return new Response("Internal Server Error", { status: 500 });
         },
     });
@@ -315,6 +414,7 @@ try {
     console.log(`Serving analysis for: ${statsFilePath}`);
 
 } catch (error) {
-    console.error("Failed to generate analysis or start server:", error);
-    process.exit(1); // Exit if initial analysis fails
+    // This might catch errors if Bun.serve itself fails immediately
+    console.error("Failed to start server:", error);
+    process.exit(1);
 }
