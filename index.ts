@@ -54,6 +54,7 @@ interface WebpackModuleNative {
     optimizationBailout: string[];
     depth: number;
     source?: string; // Source code (optional)
+    modules?: WebpackModuleNative[]; // Added: For concatenated modules
 }
 
 interface WebpackChunkNative {
@@ -257,6 +258,25 @@ program.command('serve')
             const allWarnings = statsData.warnings || [];
             const allErrors = statsData.errors || [];
 
+            // --- Precompute Module Maps for Efficient Lookup ---
+            const modulesById = new Map<string | number, WebpackModuleNative>();
+            const modulesByIdentifier = new Map<string, WebpackModuleNative>();
+            if (Array.isArray(statsData.modules)) {
+                for (const mod of statsData.modules) {
+                    if (mod.id !== null && mod.id !== undefined) { // Ensure id is present
+                        modulesById.set(mod.id, mod);
+                    }
+                    if (mod.identifier) { // Ensure identifier is present
+                        modulesByIdentifier.set(mod.identifier, mod);
+                    }
+                }
+                console.log(`Created module maps: ${modulesById.size} by ID, ${modulesByIdentifier.size} by Identifier.`);
+            } else {
+                 console.warn("No top-level 'modules' array found in stats data. Dependency lookup might be incomplete.");
+            }
+            // --- End Module Maps ---
+
+
             // --- Helper to find modules for an asset ---
             const getModulesForAsset = (assetName: string): WebpackModuleNative[] => {
                 const asset = allAssets.find(a => a.name === assetName);
@@ -337,11 +357,78 @@ program.command('serve')
                          if (modules.length === 0) {
                              // console.log(`No modules found for asset: ${assetName}`); // Removed log
                          }
-                         return Response.json(modules);
-                    },
-                },
-                // Fallback for routes not defined above
-                fetch(req: Request) {
+                 return Response.json(modules);
+            },
+
+            // API endpoint for module dependencies (children)
+            "/api/module-dependencies/:moduleIdOrIdentifier": (req: BunRequest<"/api/module-dependencies/:moduleIdOrIdentifier">) => {
+                 const { moduleIdOrIdentifier: encodedId } = req.params;
+                 if (!encodedId) {
+                     return new Response("Bad Request: Missing moduleIdOrIdentifier parameter", { status: 400 });
+                 }
+                 const moduleIdOrIdentifier = decodeURIComponent(encodedId);
+                 // console.log(`Requesting dependencies for module: ${moduleIdOrIdentifier}`);
+
+                 let directDependencies: WebpackModuleNative[] = [];
+
+                 // --- Revised Dependency Logic ---
+                 // 1. Find the target module first
+                 let targetModule: WebpackModuleNative | undefined;
+                 // Try finding by ID (if it looks like a number or is a string ID like './path')
+                 if (modulesById.has(moduleIdOrIdentifier)) {
+                     targetModule = modulesById.get(moduleIdOrIdentifier);
+                 }
+                 // If not found by ID, try by identifier
+                 if (!targetModule && modulesByIdentifier.has(moduleIdOrIdentifier)) {
+                     targetModule = modulesByIdentifier.get(moduleIdOrIdentifier);
+                 }
+                 // Special case: if the ID looks like a path, try finding by name too
+                 if (!targetModule && moduleIdOrIdentifier.includes('/')) {
+                     targetModule = (statsData.modules || []).find(m => m.name === moduleIdOrIdentifier);
+                 }
+
+
+                 if (targetModule) {
+                     // 2. Check if the target module itself contains concatenated modules
+                     if (Array.isArray(targetModule.modules) && targetModule.modules.length > 0) {
+                         // console.log(`Found ${targetModule.modules.length} concatenated modules within ${moduleIdOrIdentifier}`);
+                         directDependencies = targetModule.modules;
+                     } else {
+                         // 3. Fallback: Find modules that list the target module as their issuer
+                         // console.log(`No concatenated modules found within ${moduleIdOrIdentifier}. Searching for issuers...`);
+                         const targetId = targetModule.id;
+                         const targetIdentifier = targetModule.identifier;
+
+                         if (statsData.modules) {
+                             for (const potentialChild of statsData.modules) {
+                                 // Check issuerId first
+                                 if (targetId !== null && targetId !== undefined && potentialChild.issuerId !== null && potentialChild.issuerId !== undefined && String(potentialChild.issuerId) === String(targetId)) {
+                                     directDependencies.push(potentialChild);
+                                     continue;
+                                 }
+                                 // Fallback to checking issuer identifier string
+                                 if (targetIdentifier && potentialChild.issuer === targetIdentifier) {
+                                     directDependencies.push(potentialChild);
+                                 }
+                             }
+                         }
+                     }
+                 } else {
+                     console.warn(`Could not find target module for dependency lookup: ${moduleIdOrIdentifier}`);
+                 }
+                 // --- End Revised Logic ---
+
+
+                 // Sort dependencies by size (descending)
+                 directDependencies.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
+
+
+                 // console.log(`Found ${directDependencies.length} dependencies for ${moduleIdOrIdentifier}`); // Removed log
+                 return Response.json(directDependencies);
+            },
+        },
+        // Fallback for routes not defined above
+        fetch(req: Request) {
                     return new Response("Not Found", { status: 404 });
                 },
                 error(error: Error): Response | Promise<Response> {
