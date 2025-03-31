@@ -16,19 +16,20 @@
       .htmx-indicator{ display:none; }
       .htmx-request .htmx-indicator{ display:inline; }
       .htmx-request.htmx-indicator{ display:inline; }
+      /* Simple styling for error/warning details */
+      .problem-details { font-size: 0.8em; color: #4a5568; margin-left: 1em; }
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
     <div class="container mx-auto bg-white p-6 rounded-lg shadow-md my-8">
         <h1 class="text-2xl font-bold mb-4 text-gray-800">Webpack Bundle Analysis</h1>
         <p class="text-sm text-gray-600 mb-2">Generated: <span id="generation-time">Loading...</span></p>
-        <p class="text-sm text-gray-600 mb-4">Stats file: <span id="stats-file-path">Loading...</span></p> <!-- We might need an API endpoint to fetch this -->
+        <p class="text-sm text-gray-600 mb-4">Stats file: <span id="stats-file-path">Loading...</span></p>
 
-        <!-- Filter Controls with HTMX -->
+        <!-- Filter Controls -->
         <div class="mb-4 p-4 bg-gray-50 border border-gray-200 rounded flex flex-wrap gap-4 items-center">
              <div class="flex items-center">
                  <label for="minSizeKb" class="text-sm text-gray-700 mr-2">Hide assets <</label>
-                 <!-- Default value -->
                  <input type="number" id="minSizeKb" name="minSizeKb" value="1" min="0" step="0.1"
                         class="w-20 px-2 py-1 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 mr-1"
                         hx-get="/api/table"
@@ -40,7 +41,6 @@
             </div>
             <div class="flex-grow min-w-[200px]">
                  <label for="excludePatterns" class="sr-only">Exclude patterns (comma-separated or /regex/)</label>
-                 <!-- Default value -->
                  <input type="text" id="excludePatterns" name="excludePatterns" value=""
                         placeholder="Exclude patterns (e.g., node_modules/, .map$)"
                         class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
@@ -54,6 +54,8 @@
             <span id="loading-indicator-table" class="ml-2 text-sm text-gray-500" style="display: none;">Loading Table...</span>
         </div>
 
+        <!-- Errors container -->
+        <div id="errors-container" class="mb-4"></div>
         <!-- Warnings container -->
         <div id="warnings-container" class="mb-4"></div>
 
@@ -68,7 +70,7 @@
                     </tr>
                 </thead>
                 <tbody id="asset-table-body" class="bg-white divide-y divide-gray-200">
-                    <!-- Content loaded via HTMX -->
+                    <!-- Content loaded -->
                     <tr><td colspan="3" class="p-4 text-center text-gray-500">Loading assets...</td></tr>
                 </tbody>
             </table>
@@ -89,8 +91,8 @@
         }
 
         // --- Global State ---
-        let allAssets = []; // Holds the full asset list (either from embedded data or API)
-        let configData = {}; // Holds config data (stats path, warnings)
+        let allAssets = []; // Holds the full asset list
+        let configData = {}; // Holds config data (stats path, warnings, errors)
 
         // --- Page Setup ---
         document.addEventListener('DOMContentLoaded', () => {
@@ -104,10 +106,11 @@
             const excludePatternsInput = document.getElementById('excludePatterns');
             const tableBody = document.getElementById('asset-table-body');
             const warningsContainer = document.getElementById('warnings-container');
+            const errorsContainer = document.getElementById('errors-container'); // Get errors container
             const loadingIndicator = document.getElementById('loading-indicator-table');
 
             // --- Initial Setup ---
-            if (generationTimeEl) generationTimeEl.textContent = new Date().toLocaleString(); // Always set current time for serve mode
+            if (generationTimeEl) generationTimeEl.textContent = new Date().toLocaleString();
 
             // --- LocalStorage Persistence ---
             const savedMinSizeKb = localStorage.getItem('minSizeKb') || '1';
@@ -141,9 +144,20 @@
             }
 
             function filterAssets(assetsToFilter, filters) {
+                // Ensure assetsToFilter is an array before filtering
+                if (!Array.isArray(assetsToFilter)) {
+                    console.error("filterAssets received non-array:", assetsToFilter);
+                    return [];
+                }
                 return assetsToFilter.filter(asset => {
+                    // Basic check: Ensure asset is an object and has a name property
+                    if (typeof asset !== 'object' || asset === null || typeof asset.name !== 'string') {
+                        console.warn("Filtering out invalid asset object:", asset);
+                        return false; // Filter out assets without a valid name
+                    }
+
                     const size = asset.size ?? 0;
-                    const name = asset.name;
+                    const name = asset.name; // Now we know name is a string
                     let hidden = false;
 
                     if (size < filters.minSizeBytes) {
@@ -179,12 +193,11 @@
                     return;
                 }
 
-                const maxSize = Math.max(0, ...assets.map(a => a.size ?? 0)); // Ensure maxSize is not negative
+                const maxSize = Math.max(0, ...assets.map(a => a.size ?? 0));
                 let tableHtml = '';
                 assets.forEach(asset => {
                     const sizeBytes = asset.size ?? 0;
                     const formattedSize = formatBytes(sizeBytes);
-                    // Ensure percentage is between 0 and 100
                     const percentage = maxSize > 0 ? Math.max(0, Math.min(100, (sizeBytes / maxSize) * 100)).toFixed(1) : 0;
                     tableHtml += `
                         <tr data-size-bytes="${sizeBytes}" data-asset-name="${asset.name}">
@@ -201,25 +214,43 @@
                 tableBody.innerHTML = tableHtml;
             }
 
-             // --- Display Warnings ---
-             function displayWarnings(warnings) {
-                 if (warningsContainer && Array.isArray(warnings) && warnings.length > 0) {
-                     warningsContainer.innerHTML = '<h3 class="text-lg font-semibold text-orange-700 mb-2">Warnings:</h3><ul class="list-disc list-inside text-sm text-orange-600">';
-                     warnings.forEach(w => {
-                         warningsContainer.innerHTML += `<li>Asset: ${w.asset?.name || 'Unknown'} - ${w.warning || 'Unknown warning'}</li>`;
+             // --- Display Problems (Warnings/Errors) ---
+             function displayProblems(container, problems, title, titleColor, textColor) {
+                 if (container && Array.isArray(problems) && problems.length > 0) {
+                     let html = `<h3 class="text-lg font-semibold ${titleColor} mb-2">${title}: (${problems.length})</h3><ul class="list-disc list-inside text-sm ${textColor} space-y-1">`;
+                     problems.forEach(p => {
+                         html += `<li>${p.message || 'Unknown problem'}`;
+                         // Add details if available
+                         let details = [];
+                         if (p.moduleName) details.push(`Module: ${p.moduleName}`);
+                         if (p.loc) details.push(`Location: ${p.loc}`);
+                         if (p.details) details.push(`Details: ${p.details.substring(0, 100)}...`); // Truncate long details
+                         if (details.length > 0) {
+                             html += `<div class="problem-details">${details.join('<br>')}</div>`;
+                         }
+                         html += `</li>`;
                      });
-                     warningsContainer.innerHTML += '</ul>';
-                 } else if (warningsContainer) {
-                     warningsContainer.innerHTML = ''; // Clear if no warnings
+                     html += '</ul>';
+                     container.innerHTML = html;
+                 } else if (container) {
+                     container.innerHTML = ''; // Clear if no problems
                  }
+             }
+
+             function displayWarnings(warnings) {
+                 displayProblems(warningsContainer, warnings, 'Warnings', 'text-orange-700', 'text-orange-600');
+             }
+
+             function displayErrors(errors) {
+                 displayProblems(errorsContainer, errors, 'Errors', 'text-red-700', 'text-red-600');
              }
 
             // --- Update View (Filter and Render) ---
             function updateView() {
                 const filters = getFilterValues();
-                const filtered = filterAssets(allAssets || [], filters); // Use global allAssets
+                const filtered = filterAssets(allAssets || [], filters);
                 renderTable(filtered);
-                saveState(); // Save filter state
+                saveState();
             }
 
             // --- Initialization Logic ---
@@ -228,13 +259,14 @@
                 allAssets = initialAssets || [];
 
                 // Update static info
-                if (generationTimeEl && configData.generationTime) { // Use embedded time if available
+                if (generationTimeEl && configData.generationTime) {
                      generationTimeEl.textContent = new Date(configData.generationTime).toLocaleString();
                 }
                 if (statsPathEl) statsPathEl.textContent = configData.statsFilePath || 'N/A';
 
-                // Display warnings
+                // Display warnings and errors
                 displayWarnings(configData.warnings);
+                displayErrors(configData.errors); // Call displayErrors
 
                 // Add event listeners for filters
                 if (minSizeKbInput) minSizeKbInput.addEventListener('input', updateView);
@@ -248,48 +280,51 @@
             if (isExportMode) {
                 // Data is embedded
                 initializeApp(window.__INITIAL_DATA__, window.__INITIAL_DATA__?.assets);
-                // Remove HTMX script if it exists (it shouldn't be added in export)
                 const htmxScript = document.querySelector('script[src*="htmx.min.js"]');
                 htmxScript?.remove();
             } else {
                 // Serve mode: Fetch data
-                if (loadingIndicator) loadingIndicator.style.display = 'inline'; // Show loading indicator
+                if (loadingIndicator) loadingIndicator.style.display = 'inline';
 
-                // Dynamically load HTMX only if needed
+                // Dynamically load HTMX
                 const htmxScript = document.createElement('script');
                 htmxScript.src = "//cdnjs.cloudflare.com/ajax/libs/htmx/2.0.4/htmx.min.js";
                 htmxScript.crossOrigin = "anonymous";
                 htmxScript.onload = () => {
                     console.log("HTMX loaded dynamically.");
-                    // Initialize HTMX after loading
                     htmx.process(document.body);
 
-                    // Fetch config first
+                    // Fetch config first (includes warnings/errors)
                     fetch('/api/config')
                         .then(response => response.ok ? response.json() : Promise.reject(`Config fetch failed: ${response.status}`))
                         .then(config => {
                             configData = config; // Store config globally
+                            // Display config info immediately
                             if (statsPathEl) statsPathEl.textContent = config.statsFilePath || 'Error loading path';
-                            displayWarnings(config.warnings); // Display warnings from config
+                            displayWarnings(config.warnings);
+                            displayErrors(config.errors); // Display errors from config
 
-                            // Now fetch all assets (no filters sent to server)
+                            // Now fetch all assets
                             return fetch('/api/table');
                         })
                         .then(response => response.ok ? response.json() : Promise.reject(`Table fetch failed: ${response.status}`))
                         .then(assets => {
-                            if (assets.error) { // Check for backend error in response body
+                            if (assets.error) {
                                 return Promise.reject(`API Error: ${assets.error}`);
                             }
                             allAssets = assets; // Store all assets globally
-                            initializeApp(configData, allAssets); // Initialize with fetched data
+                            initializeApp(configData, allAssets); // Re-initialize (mainly to render table)
                         })
                         .catch(error => {
                             console.error('Error fetching data in serve mode:', error);
                             if (tableBody) tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data: ${error}. Check console.</td></tr>`;
                             if (statsPathEl) statsPathEl.textContent = 'Error loading path';
+                            // Clear potential stale warnings/errors on fetch error
+                            displayWarnings([]);
+                            displayErrors([]);
                         })
                         .finally(() => {
-                             if (loadingIndicator) loadingIndicator.style.display = 'none'; // Hide loading indicator
+                             if (loadingIndicator) loadingIndicator.style.display = 'none';
                         });
                 };
                 htmxScript.onerror = () => {
@@ -297,7 +332,7 @@
                      if (loadingIndicator) loadingIndicator.style.display = 'none';
                      if (tableBody) tableBody.innerHTML = `<tr><td colspan="3" class="px-6 py-4 text-center text-red-600">Error: Could not load required script (HTMX).</td></tr>`;
                 };
-                document.head.appendChild(htmxScript); // Add HTMX script to head
+                document.head.appendChild(htmxScript);
             }
         }); // End DOMContentLoaded
     </script>
