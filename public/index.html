@@ -157,7 +157,7 @@
                 </tbody>
             </table>
         </div>
-        
+
         <!-- Module Details Modal -->
         <div :class="['modal-overlay', { 'active': isModalVisible }]" @click.self="closeModal">
             <div class="modal-content">
@@ -174,13 +174,16 @@
                     <p v-else-if="modalError" class="text-red-600">Error loading modules: {{ modalError }}</p>
                     <div v-else-if="filteredModules && filteredModules.length > 0"> <!-- Use filteredModules -->
                         <!-- Remove list-disc, keep other styles -->
-                        <ul class="list-inside space-y-2 max-h-[55vh] overflow-y-auto overflow-x-hidden px-2"> <!-- Adjusted max-h -->
+                        <ul class="list-none space-y-2 max-h-[55vh] overflow-y-auto overflow-x-hidden px-2"> <!-- Adjusted max-h, list-none -->
                             <!-- Use filteredModules -->
                             <template v-for="(mod, index) in filteredModules" :key="mod.identifier || mod.name || index">
+                                <!-- Pass maxModuleSizeInModal -->
                                 <module-item
                                             :module="mod"
+                                            :level="0"
                                             :format-bytes="formatBytes"
-                                            :module-size-percentage="moduleSizePercentage" />
+                                            :module-size-percentage="moduleSizePercentage"
+                                            :max-module-size-in-asset="maxModuleSizeInModal" />
                             </template>
                         </ul>
                     </div>
@@ -197,27 +200,109 @@
 
         // Define component outside createApp for global usage
         const ModuleItem = defineComponent({
+            name: 'ModuleItem', // Name for recursive reference
             template: `
-              <li :title="module.identifier || module.name" class="mb-2 pb-2 border-b border-gray-100 last:border-b-0">
-                <div class="flex justify-between items-center mb-1">
-                    <div class="min-w-0 flex-1 mr-2"> <!-- Allow shrinking and add margin -->
-                        <span class="font-medium text-gray-800 block truncate">{{ module.name || 'Unknown Module' }}</span> <!-- Truncate long names -->
+              <li :title="module.identifier || module.name"
+                  class="mb-2 pb-2 border-b border-gray-100 last:border-b-0"
+                  :style="{ marginLeft: level * 1.5 + 'rem' }">
+                <div class="flex justify-between items-start mb-1"> <!-- Use items-start -->
+                    <!-- Toggle Button -->
+                    <button @click="toggleExpand"
+                            :disabled="!hasPotentialChildren"
+                            class="mr-1 text-sm w-5 h-5 flex items-center justify-center flex-shrink-0"
+                            :class="{ 'cursor-pointer text-blue-600 hover:text-blue-800': hasPotentialChildren, 'text-gray-300 cursor-default': !hasPotentialChildren }"
+                            :aria-expanded="isExpanded.toString()"
+                            :aria-label="isExpanded ? 'Collapse dependencies' : 'Expand dependencies'">
+                        <!-- Use v-if/else for clarity -->
+                        <span v-if="isLoadingChildren" class="animate-spin text-xs">⏳</span>
+                        <span v-else-if="hasPotentialChildren">{{ isExpanded ? '▼' : '▶' }}</span>
+                        <span v-else>&nbsp;</span> <!-- Placeholder for alignment -->
+                    </button>
+                    <div class="min-w-0 flex-1 mr-2">
+                        <span class="font-medium text-gray-800 block truncate">{{ module.name || 'Unknown Module' }}</span>
                         <span class="text-gray-600"> ({{ formatBytes(module.size) }})</span>
                     </div>
-                    <div v-if="module.issuerName" class="text-xs text-gray-500 text-right flex-shrink-0 ml-2">
+                    <!-- Show issuer only for top level -->
+                    <div v-if="module.issuerName && level === 0" class="text-xs text-gray-500 text-right flex-shrink-0 ml-2">
                       imported by: {{ module.issuerName }}
                     </div>
                 </div>
-                <!-- Visualization Bar -->
-                <div class="w-full bg-gray-200 rounded-full h-1.5 dark:bg-gray-700" :title="\`\${moduleSizePercentage(module)}% of largest module in this asset (\${formatBytes(module.size)})\`">
-                  <div class="bg-purple-600 h-1.5 rounded-full" :style="{ width: moduleSizePercentage(module) + '%' }"></div>
+                <!-- Visualization Bar - Indented -->
+                <div class="w-full bg-gray-200 rounded-full h-1.5 dark:bg-gray-700 ml-6"
+                     :title="\`\${moduleSizePercentage(module, maxModuleSizeInAsset)}% of largest module in this asset (\${formatBytes(module.size)})\`">
+                  <div class="bg-purple-600 h-1.5 rounded-full" :style="{ width: moduleSizePercentage(module, maxModuleSizeInAsset) + '%' }"></div>
                 </div>
+                <!-- Recursive Children -->
+                <ul v-if="isExpanded && children.length > 0" class="list-none mt-2">
+                    <module-item v-for="child in children"
+                                 :key="child.identifier || child.name"
+                                 :module="child"
+                                 :level="level + 1"
+                                 :format-bytes="formatBytes"
+                                 :module-size-percentage="moduleSizePercentage"
+                                 :max-module-size-in-asset="maxModuleSizeInAsset" />
+                </ul>
+                <p v-if="isExpanded && !isLoadingChildren && children.length === 0 && hasPotentialChildren" class="text-xs text-gray-400 ml-6 mt-1">No direct dependencies found.</p>
+                <p v-if="errorLoadingChildren" class="text-xs text-red-500 ml-6 mt-1">Error loading dependencies: {{ errorLoadingChildren }}</p>
               </li>
             `,
             props: {
                 module: { type: Object, required: true },
+                level: { type: Number, default: 0 },
                 formatBytes: { type: Function, required: true },
-                moduleSizePercentage: { type: Function, required: true } // Add new prop
+                moduleSizePercentage: { type: Function, required: true },
+                maxModuleSizeInAsset: { type: Number, required: true } // Max size in the *top-level* asset
+            },
+            setup(props) {
+                const isExpanded = ref(false);
+                const isLoadingChildren = ref(false);
+                const children = ref([]);
+                const errorLoadingChildren = ref(null);
+
+                // Determine if the module *might* have children based on its structure
+                // For simplicity, we'll assume any module could have dependencies fetched via API.
+                // A more accurate check might look at `module.reasons` if available and detailed.
+                const hasPotentialChildren = computed(() => true); // Assume possible children
+
+                const toggleExpand = async () => {
+                    if (!hasPotentialChildren.value) return;
+
+                    isExpanded.value = !isExpanded.value;
+
+                    // Fetch children only when expanding for the first time
+                    if (isExpanded.value && children.value.length === 0 && !isLoadingChildren.value && !errorLoadingChildren.value) {
+                        isLoadingChildren.value = true;
+                        errorLoadingChildren.value = null;
+                        try {
+                            // Prefer module.id if available, otherwise use identifier
+                            const idToFetch = props.module.id ?? props.module.identifier;
+                            if (!idToFetch) {
+                                throw new Error("Module has no ID or Identifier to fetch dependencies.");
+                            }
+                            const response = await fetch(`/api/module-dependencies/${encodeURIComponent(idToFetch)}`);
+                            if (!response.ok) {
+                                throw new Error(`API Error: ${response.status} ${response.statusText}`);
+                            }
+                            const fetchedChildren = await response.json();
+                            children.value = fetchedChildren;
+                        } catch (err) {
+                            console.error("Error fetching module dependencies:", err);
+                            errorLoadingChildren.value = err instanceof Error ? err.message : String(err);
+                            // Keep expanded to show the error
+                        } finally {
+                            isLoadingChildren.value = false;
+                        }
+                    }
+                };
+
+                return {
+                    isExpanded,
+                    isLoadingChildren,
+                    children,
+                    errorLoadingChildren,
+                    hasPotentialChildren,
+                    toggleExpand
+                };
             }
         });
 
@@ -327,10 +412,35 @@
                      const filter = modalFilterText.value.toLowerCase().trim();
                      if (!filter) return selectedAssetModules.value; // No filter applied
 
+                     // Recursive filtering function
+                     const filterRecursive = (modules) => {
+                         return modules.map(mod => {
+                             const name = mod.name || '';
+                             const issuerName = mod.issuerName || '';
+                             const nameMatch = name.toLowerCase().includes(filter);
+                             const issuerMatch = issuerName.toLowerCase().includes(filter);
+
+                             // Recursively filter children if they exist (or might exist)
+                             // Note: This assumes children are fetched/available.
+                             // A simpler approach is to filter only the top level.
+                             // Let's stick to filtering only the top level for now.
+                             // const filteredChildren = mod.children ? filterRecursive(mod.children) : [];
+
+                             // Keep the module if it matches or has matching children
+                             // if (nameMatch || issuerMatch || filteredChildren.length > 0) {
+                             //    return { ...mod, children: filteredChildren };
+                             // }
+                             if (nameMatch || issuerMatch) {
+                                 return mod; // Keep the module if it matches
+                             }
+                             return null; // Discard if no match
+                         }).filter(mod => mod !== null);
+                     };
+
+                     // Apply filtering only to the top-level modules fetched for the asset
                      return selectedAssetModules.value.filter(mod => {
                          const name = mod.name || '';
                          const issuerName = mod.issuerName || '';
-                         // Check if name or issuerName includes the filter text
                          return name.toLowerCase().includes(filter) || issuerName.toLowerCase().includes(filter);
                      });
                  });
@@ -358,72 +468,19 @@
                     return Math.max(0, Math.min(100, (sizeBytes / max) * 100)).toFixed(1);
                 }
 
-                // --- New method for module percentage ---
-                function moduleSizePercentage(module) {
+                // --- Updated method for module percentage ---
+                // Now accepts the max size for the context (asset or parent module)
+                function moduleSizePercentage(module, maxContextSize) {
                     const sizeBytes = module.size ?? 0;
-                    const max = maxModuleSizeInModal.value;
+                    const max = maxContextSize; // Use the passed max size
                     if (max <= 0 || sizeBytes <= 0) return 0;
-                    return Math.max(0, Math.min(100, (sizeBytes / max) * 100)).toFixed(1);
+                    // Ensure percentage is relative to the *overall* max for the asset for consistency
+                    // We use maxModuleSizeInModal which holds the max size of the top-level modules for the asset
+                    const overallMax = maxModuleSizeInModal.value;
+                    if (overallMax <= 0) return 0; // Avoid division by zero if modal max is 0
+                    return Math.max(0, Math.min(100, (sizeBytes / overallMax) * 100)).toFixed(1);
                 }
-                // --- End new method ---
-
-                function getModulesForAssetClientSide(assetName) {
-                    // This function currently returns a flat list.
-                    // For true recursion, this would need to process the stats data
-                    // to build a hierarchical structure (e.g., modules with children based on reasons/issuers).
-                    // This is complex and depends heavily on the stats format details.
-                    // This function is now only used in export mode, which is removed.
-                    // Keeping the function definition but it won't be called.
-                    // Or we can remove it entirely if preferred. Let's remove it for cleanliness.
-                    console.warn("getModulesForAssetClientSide called unexpectedly in serve-only mode.");
-                    return [];
-                    /* Original logic removed as it depended on fullStatsData
-                    if (!fullStatsData.value || !Array.isArray(fullStatsData.value.assets)) return [];
-
-                    const asset = fullStatsData.value.assets.find(a => a.name === assetName);
-                    if (!asset || !Array.isArray(asset.chunks) || (!Array.isArray(fullStatsData.value.chunks) && !Array.isArray(fullStatsData.value.modules))) return [];
-
-                    const relevantChunkIds = new Set(asset.chunks);
-                    const relevantModules = new Set(); // Use Set to avoid duplicates and simplify logic
-
-                    // Prioritize modules listed directly within chunks if available
-                    if (Array.isArray(fullStatsData.value.chunks)) {
-                        fullStatsData.value.chunks.forEach(chunk => {
-                            if (relevantChunkIds.has(chunk.id) && Array.isArray(chunk.modules)) {
-                                chunk.modules.forEach(module => {
-                                    // Add the module object directly. Ensure it's a valid object.
-                                    if (typeof module === 'object' && module !== null) {
-                                        relevantModules.add(module);
-                                    }
-                                });
-                            }
-                        });
-                    }
-
-                    // Fallback or primary source: Check top-level modules - Removed
-                    /*
-                    if (Array.isArray(fullStatsData.value.modules)) {
-                         fullStatsData.value.modules.forEach(module => {
-                             if (Array.isArray(module.chunks) && module.chunks.some(chunkId => relevantChunkIds.has(chunkId))) {
-                                 // Add the module object if it's not already present from chunk processing
-                                 if (typeof module === 'object' && module !== null) {
-                                     // Check uniqueness based on identifier or name if available
-                                     const exists = Array.from(relevantModules).some(existing =>
-                                         (module.identifier && existing.identifier === module.identifier) ||
-                                         (!module.identifier && existing.name === module.name) // Fallback to name if no identifier
-                                     );
-                                     if (!exists) {
-                                         relevantModules.add(module);
-                                     }
-                                 }
-                             }
-                         });
-                     }
-                    */
-
-                    // Convert Set to array and sort - Removed
-                    // return Array.from(relevantModules).sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
-                }
+                // --- End updated method ---
 
 
                 async function showModuleDetails(assetName) {
@@ -432,6 +489,7 @@
                     isModalLoading.value = true;
                     modalError.value = null;
                     selectedAssetModules.value = [];
+                    modalFilterText.value = ''; // Clear filter when opening modal
 
                     try {
                         // Always fetch from API now
@@ -441,7 +499,7 @@
                         }
                         const modules = await response.json();
                         selectedAssetModules.value = modules; // Assign fetched modules
-                        // Calculate max size for the newly fetched modules
+                        // Calculate max size for the newly fetched modules (top level)
                         maxModuleSizeInModal.value = Math.max(0, ...(modules.map(m => m.size ?? 0)));
                     } catch (error) {
                         console.error(`Error getting module details for ${assetName}:`, error);
@@ -522,6 +580,7 @@
                     modalError,
                     selectedAsset,
                     selectedAssetModules,
+                    maxModuleSizeInModal, // Pass this to template
                     errorsOpen,
                     warningsOpen,
                      // Computed
