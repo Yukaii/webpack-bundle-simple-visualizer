@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { BunRequest } from 'bun';
 import { Command } from 'commander';
 import staticHtmlContent from './public/index.html' with { type: 'text' }; // Import HTML content directly
+import staticWorkerContent from './public/filter.worker.js' with { type: 'text' }; // Import Worker content directly
 
 // --- Native Webpack Stats Interfaces (Based on provided documentation) ---
 
@@ -319,6 +320,13 @@ program.command('serve')
                     "/": (req) => {
                         return new Response(staticHtmlContent, {
                             headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                        });
+                    },
+
+                    // Serve the worker script using imported content
+                    "/filter.worker.js": (req) => {
+                        return new Response(staticWorkerContent, {
+                            headers: { 'Content-Type': 'application/javascript; charset=utf-8' }
                         });
                     },
 

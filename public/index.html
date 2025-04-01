@@ -75,7 +75,8 @@
                         class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
                         title="Comma-separated list of strings or /regex/ patterns to exclude" />
             </div>
-            <span v-if="isLoading" class="ml-2 text-sm text-gray-500">Loading...</span>
+            <!-- Updated Loading Indicator -->
+            <span v-if="isLoading || isWorkerProcessing" class="ml-2 text-sm text-gray-500">Loading...</span>
         </div>
 
         <!-- Errors container -->
@@ -124,6 +125,10 @@
         </div>
 
         <h2 class="text-xl font-semibold mb-3 text-gray-700">Asset Sizes</h2>
+        <!-- Worker Error Display -->
+        <div v-if="workerError" class="mb-4 p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
+            Error processing assets: {{ workerError }}
+        </div>
         <div class="overflow-auto relative max-h-[70vh] border border-gray-200 rounded">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="sticky top-0 z-10 bg-gray-50">
@@ -134,20 +139,26 @@
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
-                    <tr v-if="isLoading && filteredAssets.length === 0">
-                        <td colspan="3" class="p-4 text-center text-gray-500">Loading assets...</td>
+                    <!-- Updated Loading/Empty States -->
+                    <tr v-if="isLoading"> <!-- Initial load -->
+                        <td colspan="3" class="p-4 text-center text-gray-500">Loading initial data...</td>
                     </tr>
-                    <tr v-else-if="!isLoading && filteredAssets.length === 0">
+                    <tr v-else-if="isWorkerProcessing && processedAssets.length === 0"> <!-- Worker processing, no results yet -->
+                         <td colspan="3" class="p-4 text-center text-gray-500">Processing assets...</td>
+                     </tr>
+                    <tr v-else-if="!isWorkerProcessing && processedAssets.length === 0"> <!-- Worker done, no results -->
                         <td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td>
                     </tr>
-                    <tr v-else v-for="asset in filteredAssets" :key="asset.name" :data-asset-name="asset.name">
+                    <!-- Use processedAssets from worker -->
+                    <tr v-else v-for="asset in processedAssets" :key="asset.name" :data-asset-name="asset.name">
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 break-all">
                             <a href="#" @click.prevent="showModuleDetails(asset.name)" class="clickable-asset">{{ asset.name }}</a>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">{{ formatBytes(asset.size) }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" :title="`${assetSizePercentage(asset)}% of largest asset (${formatBytes(asset.size)})`">
-                              <div class="bg-blue-600 h-2.5 rounded-full" :style="{ width: assetSizePercentage(asset) + '%' }"></div>
+                            <!-- Use method for title attribute -->
+                            <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" :title="getAssetTitle(asset)">
+                              <div class="bg-blue-600 h-2.5 rounded-full" :style="{ width: asset.percentage + '%' }"></div>
                             </div>
                         </td>
                     </tr>
@@ -158,12 +169,11 @@
             </table>
         </div>
 
-        <!-- Module Details Modal -->
+        <!-- Module Details Modal (No changes needed here for worker) -->
         <div :class="['modal-overlay', { 'active': isModalVisible }]" @click.self="closeModal">
             <div class="modal-content">
                 <button @click="closeModal" class="modal-close-btn" aria-label="Close modal">&times;</button>
                 <h3 class="text-xl font-semibold mb-2 text-gray-800">Modules for: {{ selectedAsset?.name }}</h3>
-                <!-- Filter Input for Modal -->
                 <div class="mb-3">
                     <label for="modalFilter" class="sr-only">Filter modules</label>
                     <input type="text" id="modalFilter" v-model="modalFilterText" placeholder="Filter modules by name..."
@@ -172,12 +182,9 @@
                 <div class="text-sm">
                     <p v-if="isModalLoading" class="text-gray-500">Loading...</p>
                     <p v-else-if="modalError" class="text-red-600">Error loading modules: {{ modalError }}</p>
-                    <div v-else-if="filteredModules && filteredModules.length > 0"> <!-- Use filteredModules -->
-                        <!-- Remove list-disc, keep other styles -->
-                        <ul class="list-none space-y-2 max-h-[55vh] overflow-y-auto overflow-x-hidden px-2"> <!-- Adjusted max-h, list-none -->
-                            <!-- Use filteredModules -->
+                    <div v-else-if="filteredModules && filteredModules.length > 0">
+                        <ul class="list-none space-y-2 max-h-[55vh] overflow-y-auto overflow-x-hidden px-2">
                             <template v-for="(mod, index) in filteredModules" :key="mod.identifier || mod.name || index">
-                                <!-- Pass maxModuleSizeInModal -->
                                 <module-item
                                             :module="mod"
                                             :level="0"
@@ -187,7 +194,6 @@
                             </template>
                         </ul>
                     </div>
-                    <!-- Adjust message for filtering -->
                     <p v-else-if="selectedAssetModules && selectedAssetModules.length > 0 && filteredModules.length === 0" class="text-gray-500">No modules match the filter.</p>
                     <p v-else class="text-gray-500">No module details found for this asset.</p>
                 </div>
@@ -196,43 +202,38 @@
     </div>
 
     <script>
-        const { createApp, ref, reactive, computed, onMounted, watch, defineComponent } = Vue;
+        const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, defineComponent } = Vue; // Added onUnmounted
 
-        // Define component outside createApp for global usage
+        // ModuleItem component remains the same
         const ModuleItem = defineComponent({
-            name: 'ModuleItem', // Name for recursive reference
+            name: 'ModuleItem',
             template: `
               <li :title="module.identifier || module.name"
                   class="mb-2 pb-2 border-b border-gray-100 last:border-b-0"
                   :style="{ marginLeft: level * 1.5 + 'rem' }">
-                <div class="flex justify-between items-start mb-1"> <!-- Use items-start -->
-                    <!-- Toggle Button -->
+                <div class="flex justify-between items-start mb-1">
                     <button @click="toggleExpand"
                             :disabled="!hasPotentialChildren"
                             class="mr-1 text-sm w-5 h-5 flex items-center justify-center flex-shrink-0"
                             :class="{ 'cursor-pointer text-blue-600 hover:text-blue-800': hasPotentialChildren, 'text-gray-300 cursor-default': !hasPotentialChildren }"
                             :aria-expanded="isExpanded.toString()"
                             :aria-label="isExpanded ? 'Collapse dependencies' : 'Expand dependencies'">
-                        <!-- Use v-if/else for clarity -->
                         <span v-if="isLoadingChildren" class="animate-spin text-xs">⏳</span>
                         <span v-else-if="hasPotentialChildren">{{ isExpanded ? '▼' : '▶' }}</span>
-                        <span v-else>&nbsp;</span> <!-- Placeholder for alignment -->
+                        <span v-else>&nbsp;</span>
                     </button>
                     <div class="min-w-0 flex-1 mr-2">
                         <span class="font-medium text-gray-800 block truncate">{{ module.name || 'Unknown Module' }}</span>
                         <span class="text-gray-600"> ({{ formatBytes(module.size) }})</span>
                     </div>
-                    <!-- Show issuer only for top level -->
                     <div v-if="module.issuerName && level === 0" class="text-xs text-gray-500 text-right flex-shrink-0 ml-2">
                       imported by: {{ module.issuerName }}
                     </div>
                 </div>
-                <!-- Visualization Bar - Indented -->
                 <div class="w-full bg-gray-200 rounded-full h-1.5 dark:bg-gray-700 ml-6"
                      :title="\`\${moduleSizePercentage(module, maxModuleSizeInAsset)}% of largest module in this asset (\${formatBytes(module.size)})\`">
                   <div class="bg-purple-600 h-1.5 rounded-full" :style="{ width: moduleSizePercentage(module, maxModuleSizeInAsset) + '%' }"></div>
                 </div>
-                <!-- Recursive Children -->
                 <ul v-if="isExpanded && children.length > 0" class="list-none mt-2">
                     <module-item v-for="child in children"
                                  :key="child.identifier || child.name"
@@ -246,198 +247,92 @@
                 <p v-if="errorLoadingChildren" class="text-xs text-red-500 ml-6 mt-1">Error loading dependencies: {{ errorLoadingChildren }}</p>
               </li>
             `,
-            props: {
+            props: { /* props remain the same */
                 module: { type: Object, required: true },
                 level: { type: Number, default: 0 },
                 formatBytes: { type: Function, required: true },
                 moduleSizePercentage: { type: Function, required: true },
-                maxModuleSizeInAsset: { type: Number, required: true } // Max size in the *top-level* asset
+                maxModuleSizeInAsset: { type: Number, required: true }
             },
-            setup(props) {
+            setup(props) { /* setup remains the same */
                 const isExpanded = ref(false);
                 const isLoadingChildren = ref(false);
                 const children = ref([]);
                 const errorLoadingChildren = ref(null);
-
-                // Determine if the module *might* have children based on its structure
-                // For simplicity, we'll assume any module could have dependencies fetched via API.
-                // A more accurate check might look at `module.reasons` if available and detailed.
-                const hasPotentialChildren = computed(() => true); // Assume possible children
+                const hasPotentialChildren = computed(() => true);
 
                 const toggleExpand = async () => {
                     if (!hasPotentialChildren.value) return;
-
                     isExpanded.value = !isExpanded.value;
-
-                    // Fetch children only when expanding for the first time
                     if (isExpanded.value && children.value.length === 0 && !isLoadingChildren.value && !errorLoadingChildren.value) {
                         isLoadingChildren.value = true;
                         errorLoadingChildren.value = null;
                         try {
-                            // Prefer module.id if available, otherwise use identifier
                             const idToFetch = props.module.id ?? props.module.identifier;
-                            if (!idToFetch) {
-                                throw new Error("Module has no ID or Identifier to fetch dependencies.");
-                            }
+                            if (!idToFetch) throw new Error("Module has no ID or Identifier.");
                             const response = await fetch(`/api/module-dependencies/${encodeURIComponent(idToFetch)}`);
-                            if (!response.ok) {
-                                throw new Error(`API Error: ${response.status} ${response.statusText}`);
-                            }
-                            const fetchedChildren = await response.json();
-                            children.value = fetchedChildren;
+                            if (!response.ok) throw new Error(`API Error: ${response.status} ${response.statusText}`);
+                            children.value = await response.json();
                         } catch (err) {
                             console.error("Error fetching module dependencies:", err);
                             errorLoadingChildren.value = err instanceof Error ? err.message : String(err);
-                            // Keep expanded to show the error
                         } finally {
                             isLoadingChildren.value = false;
                         }
                     }
                 };
-
-                return {
-                    isExpanded,
-                    isLoadingChildren,
-                    children,
-                    errorLoadingChildren,
-                    hasPotentialChildren,
-                    toggleExpand
-                };
+                return { isExpanded, isLoadingChildren, children, errorLoadingChildren, hasPotentialChildren, toggleExpand };
             }
         });
 
         createApp({
             components: {
-                'module-item': ModuleItem // Register with kebab-case name
+                'module-item': ModuleItem
             },
             setup() {
-                const fullStatsData = ref(null); // Holds the entire stats object in export mode
-                const allAssets = ref([]); // Holds the asset list (fetched or from embedded)
-                const configData = reactive({ // Holds config data (stats path, warnings, errors, time)
-                    generationTime: null,
-                    statsFilePath: null,
-                    warnings: [],
-                    errors: []
-                });
-                // Removed isExportMode ref
-                const isLoading = ref(false);
-                const fetchError = ref(null); // For initial data load errors
+                // --- Worker Setup ---
+                let filterWorker = null;
+                const isWorkerProcessing = ref(false);
+                const workerError = ref(null);
+                const processedAssets = ref([]); // Data from worker
+                const totalSizeFromWorker = ref(0); // Total size from worker
 
-                // Filters
+                // --- Existing State ---
+                const allAssets = ref([]); // Holds the raw asset list
+                const configData = reactive({
+                    generationTime: null, statsFilePath: null, warnings: [], errors: []
+                });
+                const isLoading = ref(false); // For initial fetch
+                const fetchError = ref(null);
                 const minSizeKb = ref(parseFloat(localStorage.getItem('minSizeKb') || '1'));
                 const excludePatternsRaw = ref(localStorage.getItem('excludePatterns') || '');
-
-                // Modal State
                 const isModalVisible = ref(false);
                 const isModalLoading = ref(false);
                 const modalError = ref(null);
-                const selectedAsset = ref(null); // Store the whole asset object
+                const selectedAsset = ref(null);
                 const selectedAssetModules = ref([]);
-                const maxModuleSizeInModal = ref(0); // Add state for max module size in modal
-                const modalFilterText = ref(''); // Add state for modal filter input
-
-                // Collapsible section state
+                const maxModuleSizeInModal = ref(0);
+                const modalFilterText = ref('');
                 const errorsOpen = ref(localStorage.getItem('errors-list-open') === 'true');
                 const warningsOpen = ref(localStorage.getItem('warnings-list-open') === 'true');
 
                 // --- Computed Properties ---
-                const formattedGenerationTime = computed(() => {
-                    // Simplified: Always show current time if not loaded from config
-                    return configData.generationTime
-                        ? new Date(configData.generationTime).toLocaleString()
-                        : new Date().toLocaleString();
-                });
-
-                const statsFilePathDisplay = computed(() => {
-                    // Simplified: Show loading/error or the path
-                    return configData.statsFilePath || (isLoading.value ? 'Loading...' : 'Error loading path');
-                });
-
+                const formattedGenerationTime = computed(() => configData.generationTime ? new Date(configData.generationTime).toLocaleString() : new Date().toLocaleString());
+                const statsFilePathDisplay = computed(() => configData.statsFilePath || (isLoading.value ? 'Loading...' : 'Error loading path'));
                 const minSizeBytes = computed(() => (isNaN(minSizeKb.value) ? 0 : minSizeKb.value) * 1024);
 
-                const excludeFilters = computed(() => {
+                // Computed property to get serializable filter strings/regex strings
+                const serializableExcludeFilters = computed(() => {
                     return excludePatternsRaw.value.split(',')
                         .map(p => p.trim())
-                        .filter(p => p)
-                        .map(p => {
-                            if (p.startsWith('/') && p.endsWith('/')) {
-                                try { return new RegExp(p.slice(1, -1)); }
-                                catch (e) { console.warn('Invalid regex:', p); return null; }
-                            }
-                            return p;
-                        })
-                        .filter(p => p !== null);
+                        .filter(p => p); // Keep regex strings like /regex/ as strings
                 });
 
-                const filteredAssets = computed(() => {
-                    if (!Array.isArray(allAssets.value)) return [];
-
-                    const filters = {
-                        minSizeBytes: minSizeBytes.value,
-                        excludeFilters: excludeFilters.value
-                    };
-
-                    return allAssets.value.filter(asset => {
-                        if (typeof asset !== 'object' || asset === null || typeof asset.name !== 'string') {
-                            console.warn("Filtering out invalid asset object:", asset);
-                            return false;
-                        }
-                        const size = asset.size ?? 0;
-                        const name = asset.name;
-                        let hidden = false;
-
-                        if (size < filters.minSizeBytes) hidden = true;
-
-                        if (!hidden && filters.excludeFilters.length > 0) {
-                            for (const filter of filters.excludeFilters) {
-                                if (filter instanceof RegExp) {
-                                    if (filter.test(name)) { hidden = true; break; }
-                                } else if (typeof filter === 'string') {
-                                    if (name.includes(filter)) { hidden = true; break; }
-                                }
-                            }
-                        }
-                        return !hidden;
-                    });
-                });
-
-                const maxAssetSize = computed(() => {
-                     // Use filteredAssets to calculate max size based on what's visible
-                     if (!filteredAssets.value || filteredAssets.value.length === 0) return 0;
-                      return Math.max(0, ...filteredAssets.value.map(a => a.size ?? 0));
-                 });
-
+                // Modal's filtered modules (remains unchanged, operates on selectedAssetModules)
                  const filteredModules = computed(() => {
                      if (!Array.isArray(selectedAssetModules.value)) return [];
                      const filter = modalFilterText.value.toLowerCase().trim();
-                     if (!filter) return selectedAssetModules.value; // No filter applied
-
-                     // Recursive filtering function
-                     const filterRecursive = (modules) => {
-                         return modules.map(mod => {
-                             const name = mod.name || '';
-                             const issuerName = mod.issuerName || '';
-                             const nameMatch = name.toLowerCase().includes(filter);
-                             const issuerMatch = issuerName.toLowerCase().includes(filter);
-
-                             // Recursively filter children if they exist (or might exist)
-                             // Note: This assumes children are fetched/available.
-                             // A simpler approach is to filter only the top level.
-                             // Let's stick to filtering only the top level for now.
-                             // const filteredChildren = mod.children ? filterRecursive(mod.children) : [];
-
-                             // Keep the module if it matches or has matching children
-                             // if (nameMatch || issuerMatch || filteredChildren.length > 0) {
-                             //    return { ...mod, children: filteredChildren };
-                             // }
-                             if (nameMatch || issuerMatch) {
-                                 return mod; // Keep the module if it matches
-                             }
-                             return null; // Discard if no match
-                         }).filter(mod => mod !== null);
-                     };
-
-                     // Apply filtering only to the top-level modules fetched for the asset
+                     if (!filter) return selectedAssetModules.value;
                      return selectedAssetModules.value.filter(mod => {
                          const name = mod.name || '';
                          const issuerName = mod.issuerName || '';
@@ -461,45 +356,108 @@
                      return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
                  }
 
+                // Asset percentage is now directly from worker data
                 function assetSizePercentage(asset) {
-                    const sizeBytes = asset.size ?? 0;
-                    const max = maxAssetSize.value;
-                    if (max <= 0 || sizeBytes <= 0) return 0;
-                    return Math.max(0, Math.min(100, (sizeBytes / max) * 100)).toFixed(1);
+                    // This function is technically not needed if we directly use asset.percentage
+                    // Keeping it for potential future use or clarity, but it just returns the pre-calculated value.
+                    return asset.percentage ?? '0.0';
                 }
 
-                // --- Updated method for module percentage ---
-                // Now accepts the max size for the context (asset or parent module)
+                 // Method to generate title for asset visualization
+                 function getAssetTitle(asset) {
+                     const percentage = asset.percentage ?? '0.0';
+                     const assetSizeFormatted = formatBytes(asset.size);
+                     const totalSizeFormatted = formatBytes(totalSizeFromWorker.value); // Access reactive ref
+                     return `${percentage}% of total (${assetSizeFormatted} / ${totalSizeFormatted})`;
+                 }
+
+                // Module percentage calculation remains the same (operates within modal context)
                 function moduleSizePercentage(module, maxContextSize) {
                     const sizeBytes = module.size ?? 0;
-                    const max = maxContextSize; // Use the passed max size
+                    const max = maxContextSize;
                     if (max <= 0 || sizeBytes <= 0) return 0;
-                    // Ensure percentage is relative to the *overall* max for the asset for consistency
-                    // We use maxModuleSizeInModal which holds the max size of the top-level modules for the asset
                     const overallMax = maxModuleSizeInModal.value;
-                    if (overallMax <= 0) return 0; // Avoid division by zero if modal max is 0
+                    if (overallMax <= 0) return 0;
                     return Math.max(0, Math.min(100, (sizeBytes / overallMax) * 100)).toFixed(1);
                 }
-                // --- End updated method ---
 
+                // --- Worker Interaction ---
+                function updateWorker() {
+                    if (!filterWorker || !allAssets.value || allAssets.value.length === 0) {
+                        // Reset if no worker or no data
+                        processedAssets.value = [];
+                        totalSizeFromWorker.value = 0;
+                        return;
+                    }
+                    if (isWorkerProcessing.value) {
+                        console.log("Worker is busy, skipping update.");
+                        // Optionally, queue the update or terminate and restart the worker
+                        return;
+                    }
 
+                    // console.log("Sending data to worker...");
+                    isWorkerProcessing.value = true;
+                    workerError.value = null; // Clear previous errors
+                    try {
+                        // Create a deep clone suitable for postMessage
+                        const cloneableAssets = JSON.parse(JSON.stringify(allAssets.value));
+                        filterWorker.postMessage({
+                            allAssets: cloneableAssets, // Send the cloneable data
+                            minSizeBytes: minSizeBytes.value,
+                            excludeFilters: serializableExcludeFilters.value
+                        });
+                    } catch (cloneError) {
+                         console.error("Error cloning data before sending to worker:", cloneError);
+                         workerError.value = "Failed to prepare data for processing.";
+                         isWorkerProcessing.value = false;
+                    }
+                }
+
+                function initializeWorker() {
+                    filterWorker = new Worker('./filter.worker.js'); // Relative path from HTML
+
+                    filterWorker.onmessage = (event) => {
+                        // console.log("Message received from worker:", event.data.type);
+                        if (event.data.type === 'RESULT') {
+                            processedAssets.value = event.data.payload.processedAssets;
+                            totalSizeFromWorker.value = event.data.payload.totalSize;
+                            workerError.value = null;
+                        } else if (event.data.type === 'ERROR') {
+                            console.error("Worker Error:", event.data.payload);
+                            workerError.value = event.data.payload;
+                            processedAssets.value = []; // Clear results on error
+                            totalSizeFromWorker.value = 0;
+                        }
+                        isWorkerProcessing.value = false;
+                    };
+
+                    filterWorker.onerror = (error) => {
+                        console.error("Unhandled Worker Error:", error);
+                        workerError.value = `Worker script error: ${error.message}`;
+                        isWorkerProcessing.value = false;
+                        processedAssets.value = [];
+                        totalSizeFromWorker.value = 0;
+                        // Optionally terminate and try to restart
+                        filterWorker.terminate();
+                        filterWorker = null; // Prevent further use
+                    };
+                }
+
+                // --- Modal Methods (Unchanged) ---
                 async function showModuleDetails(assetName) {
-                    selectedAsset.value = allAssets.value.find(a => a.name === assetName) || { name: assetName }; // Find the full asset object
+                    // Find the original asset from allAssets to show details
+                    selectedAsset.value = allAssets.value.find(a => a.name === assetName) || { name: assetName };
                     isModalVisible.value = true;
                     isModalLoading.value = true;
                     modalError.value = null;
                     selectedAssetModules.value = [];
-                    modalFilterText.value = ''; // Clear filter when opening modal
+                    modalFilterText.value = '';
 
                     try {
-                        // Always fetch from API now
                         const response = await fetch(`/api/asset-details/${encodeURIComponent(assetName)}`);
-                        if (!response.ok) {
-                            throw new Error(`Failed to fetch details: ${response.status} ${response.statusText}`);
-                        }
+                        if (!response.ok) throw new Error(`Failed to fetch details: ${response.status} ${response.statusText}`);
                         const modules = await response.json();
-                        selectedAssetModules.value = modules; // Assign fetched modules
-                        // Calculate max size for the newly fetched modules (top level)
+                        selectedAssetModules.value = modules;
                         maxModuleSizeInModal.value = Math.max(0, ...(modules.map(m => m.size ?? 0)));
                     } catch (error) {
                         console.error(`Error getting module details for ${assetName}:`, error);
@@ -511,67 +469,74 @@
 
                 function closeModal() {
                     isModalVisible.value = false;
-                    // Reset selected asset and modules when closing
-                     selectedAsset.value = null;
-                     selectedAssetModules.value = [];
-                     modalError.value = null;
-                     modalFilterText.value = ''; // Reset filter on close
+                    selectedAsset.value = null;
+                    selectedAssetModules.value = [];
+                    modalError.value = null;
+                    modalFilterText.value = '';
                  }
 
+                 // --- Persistence (Unchanged) ---
                  function saveState() {
                     localStorage.setItem('minSizeKb', minSizeKb.value.toString());
                     localStorage.setItem('excludePatterns', excludePatternsRaw.value);
                     localStorage.setItem('errors-list-open', errorsOpen.value.toString());
                     localStorage.setItem('warnings-list-open', warningsOpen.value.toString());
                 }
-
-                // --- Watchers for Persistence ---
-                watch(minSizeKb, saveState);
-                watch(excludePatternsRaw, saveState);
+                watch(minSizeKb, () => { saveState(); updateWorker(); }); // Update worker on change
+                watch(excludePatternsRaw, () => { saveState(); updateWorker(); }); // Update worker on change
                 watch(errorsOpen, saveState);
                 watch(warningsOpen, saveState);
+                watch(allAssets, () => { updateWorker(); }); // Update worker when initial assets load/change
 
                 // --- Lifecycle Hooks ---
                 onMounted(async () => {
-                    // Simplified: Always run in "Serve" mode logic
-                    console.log(`Running in Serve mode.`);
-                    isLoading.value = true;
-                    fetchError.value = null;
+                    console.log(`Initializing worker and fetching data...`);
+                    initializeWorker(); // Setup worker and listeners
 
-                    // Fetch config, then assets
-                    let fetchedConfig = {};
+                    isLoading.value = true; // Start initial fetch loading
+                    fetchError.value = null;
                     try {
                         const configResponse = await fetch('/api/config');
                         if (!configResponse.ok) throw new Error(`Config fetch failed: ${configResponse.status}`);
-                        fetchedConfig = await configResponse.json();
-                        Object.assign(configData, fetchedConfig); // Update configData
+                        Object.assign(configData, await configResponse.json());
 
                         const tableResponse = await fetch('/api/table');
                         if (!tableResponse.ok) throw new Error(`Table fetch failed: ${tableResponse.status}`);
-                        const assets = await tableResponse.json();
-                        if (assets.error) throw new Error(`API Error: ${assets.error}`);
-                        allAssets.value = assets;
+                        const assetsData = await tableResponse.json();
+                        if (assetsData.error) throw new Error(`API Error: ${assetsData.error}`);
+                        allAssets.value = assetsData; // Trigger watcher to update worker
 
                     } catch (error) {
-                        console.error('Error fetching data:', error);
+                        console.error('Error fetching initial data:', error);
                         fetchError.value = error.message || String(error);
-                        // Update config with error state
                         Object.assign(configData, {
                             statsFilePath: 'Error loading path',
-                            warnings: configData.warnings || [], // Keep existing warnings if any
                             errors: [...(configData.errors || []), { message: `Failed to load data: ${fetchError.value}` }]
                         });
-                        allAssets.value = [];
+                        allAssets.value = []; // Ensure watcher runs even on error
                     } finally {
-                        isLoading.value = false;
+                        isLoading.value = false; // Finish initial fetch loading
+                    }
+                });
+
+                onUnmounted(() => {
+                    if (filterWorker) {
+                        console.log("Terminating worker.");
+                        filterWorker.terminate();
+                        filterWorker = null;
                     }
                 });
 
                 // --- Return values for template ---
                 return {
+                    // Worker related
+                    isWorkerProcessing,
+                    workerError,
+                    processedAssets, // Use this instead of filteredAssets
+                    totalSizeFromWorker, // Use this instead of totalFilteredAssetSize
+                    // Existing state
                     configData,
-                    allAssets,
-                    isLoading,
+                    isLoading, // Keep for initial load indication
                     fetchError,
                     minSizeKb,
                     excludePatternsRaw,
@@ -580,23 +545,23 @@
                     modalError,
                     selectedAsset,
                     selectedAssetModules,
-                    maxModuleSizeInModal, // Pass this to template
+                    maxModuleSizeInModal,
                     errorsOpen,
                     warningsOpen,
+                    modalFilterText,
                      // Computed
                      formattedGenerationTime,
                      statsFilePathDisplay,
-                     filteredAssets,
-                     filteredModules, // Add computed property
+                     filteredModules, // Modal filtering is separate
                      // Methods
-                     formatBytes, // Make formatBytes available to the template context
+                     formatBytes,
                     truncateText,
-                    assetSizePercentage,
+                    assetSizePercentage, // Still needed for template binding clarity
+                    getAssetTitle, // Expose new method
                      showModuleDetails,
                      closeModal,
-                     moduleSizePercentage, // Return the new method
-                     modalFilterText, // Add ref
-                     ModuleItem // Return ModuleItem so template can use it
+                     moduleSizePercentage,
+                     ModuleItem
                  };
             }
         }).mount('#app');
