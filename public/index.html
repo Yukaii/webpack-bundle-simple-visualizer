@@ -135,19 +135,20 @@
                     <tr>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset Name</th>
                         <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Percentage</th> <!-- New Column Header -->
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Visualization</th>
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     <!-- Updated Loading/Empty States -->
                     <tr v-if="isLoading"> <!-- Initial load -->
-                        <td colspan="3" class="p-4 text-center text-gray-500">Loading initial data...</td>
+                        <td colspan="4" class="p-4 text-center text-gray-500">Loading initial data...</td> <!-- Updated colspan -->
                     </tr>
                     <tr v-else-if="isWorkerProcessing && processedAssets.length === 0"> <!-- Worker processing, no results yet -->
-                         <td colspan="3" class="p-4 text-center text-gray-500">Processing assets...</td>
+                         <td colspan="4" class="p-4 text-center text-gray-500">Processing assets...</td> <!-- Updated colspan -->
                      </tr>
                     <tr v-else-if="!isWorkerProcessing && processedAssets.length === 0"> <!-- Worker done, no results -->
-                        <td colspan="3" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td>
+                        <td colspan="4" class="px-6 py-4 text-center text-gray-500">No assets match filters.</td> <!-- Updated colspan -->
                     </tr>
                     <!-- Use processedAssets from worker -->
                     <tr v-else v-for="asset in processedAssets" :key="asset.name" :data-asset-name="asset.name">
@@ -155,15 +156,16 @@
                             <a href="#" @click.prevent="showModuleDetails(asset.name)" class="clickable-asset">{{ asset.name }}</a>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">{{ formatBytes(asset.size) }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">{{ asset.percentage }}%</td> <!-- New Column Data -->
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             <!-- Use method for title attribute -->
                             <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700" :title="getAssetTitle(asset)">
                               <div class="bg-blue-600 h-2.5 rounded-full" :style="{ width: asset.percentage + '%' }"></div>
                             </div>
                         </td>
-                    </tr>
+                     </tr>
                      <tr v-if="fetchError">
-                         <td colspan="3" class="px-6 py-4 text-center text-red-600">Error loading data: {{ fetchError }}. Check console.</td>
+                         <td colspan="4" class="px-6 py-4 text-center text-red-600">Error loading data: {{ fetchError }}. Check console.</td> <!-- Updated colspan -->
                      </tr>
                 </tbody>
             </table>
