@@ -232,9 +232,12 @@
                       imported by: {{ module.issuerName }}
                     </div>
                 </div>
-                <div class="w-full bg-gray-200 rounded-full h-1.5 dark:bg-gray-700 ml-6"
-                     :title="\`\${moduleSizePercentage(module, maxModuleSizeInAsset)}% of largest module in this asset (\${formatBytes(module.size)})\`">
-                  <div class="bg-purple-600 h-1.5 rounded-full" :style="{ width: moduleSizePercentage(module, maxModuleSizeInAsset) + '%' }"></div>
+                <div class="flex items-center ml-6">
+                    <div class="w-full bg-gray-200 rounded-full h-1.5 dark:bg-gray-700 mr-2"
+                         :title="\`\${moduleSizePercentage(module, maxModuleSizeInAsset)}% of largest module in this asset (\${formatBytes(module.size)})\`">
+                      <div class="bg-purple-600 h-1.5 rounded-full" :style="{ width: moduleSizePercentage(module, maxModuleSizeInAsset) + '%' }"></div>
+                    </div>
+                    <span class="text-xs text-gray-500 min-w-[3.5rem] text-right">{{ moduleSizePercentage(module, maxModuleSizeInAsset) }}%</span>
                 </div>
                 <ul v-if="isExpanded && children.length > 0" class="list-none mt-2">
                     <module-item v-for="child in children"
@@ -373,14 +376,9 @@
                      return `${percentage}% of total (${assetSizeFormatted} / ${totalSizeFormatted})`;
                  }
 
-                // Module percentage calculation remains the same (operates within modal context)
-                function moduleSizePercentage(module, maxContextSize) {
-                    const sizeBytes = module.size ?? 0;
-                    const max = maxContextSize;
-                    if (max <= 0 || sizeBytes <= 0) return 0;
-                    const overallMax = maxModuleSizeInModal.value;
-                    if (overallMax <= 0) return 0;
-                    return Math.max(0, Math.min(100, (sizeBytes / overallMax) * 100)).toFixed(1);
+                // Use pre-calculated percentage from worker data
+                function moduleSizePercentage(module) {
+                    return module.percentage ?? 0;
                 }
 
                 // --- Worker Interaction ---
@@ -459,8 +457,19 @@
                         const response = await fetch(`/api/asset-details/${encodeURIComponent(assetName)}`);
                         if (!response.ok) throw new Error(`Failed to fetch details: ${response.status} ${response.statusText}`);
                         const modules = await response.json();
-                        selectedAssetModules.value = modules;
-                        maxModuleSizeInModal.value = Math.max(0, ...(modules.map(m => m.size ?? 0)));
+                        const totalModuleSize = modules.reduce((sum, m) => sum + (Number(m.size) || 0), 0);
+                        selectedAssetModules.value = modules.map(mod => {
+                            const sizeBytes = Number(mod.size) || 0;
+                            const percentage = totalModuleSize > 0 
+                                ? Number(((sizeBytes / totalModuleSize) * 100).toFixed(1))
+                                : 0;
+                            return {
+                                ...mod,
+                                size: sizeBytes,
+                                percentage: Math.max(0, Math.min(100, percentage))
+                            };
+                        });
+                        maxModuleSizeInModal.value = Math.max(0, ...(selectedAssetModules.value.map(m => m.size)));
                     } catch (error) {
                         console.error(`Error getting module details for ${assetName}:`, error);
                         modalError.value = error instanceof Error ? error.message : String(error);

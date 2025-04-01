@@ -48,16 +48,20 @@ function filterAssets(allAssets, minSizeBytes, excludeFilters) {
  * @returns {{processedAssets: Array<Object>, totalSize: number}} - Assets with added 'percentage' property and the total size.
  */
 function calculatePercentages(assets) {
-    const totalSize = assets.reduce((sum, asset) => sum + (asset.size ?? 0), 0);
+    const totalSize = assets.reduce((sum, asset) => sum + (Number(asset.size) || 0), 0);
     const processedAssets = assets.map(asset => {
-        const sizeBytes = asset.size ?? 0;
+        const sizeBytes = Number(asset.size) || 0;
         let percentage = 0;
         if (totalSize > 0 && sizeBytes > 0) {
-            percentage = Math.max(0, Math.min(100, (sizeBytes / totalSize) * 100));
+            // Calculate percentage with 1 decimal place directly
+            percentage = Number(((sizeBytes / totalSize) * 100).toFixed(1));
+            // Ensure the percentage is between 0 and 100
+            percentage = Math.max(0, Math.min(100, percentage));
         }
         return {
             ...asset,
-            percentage: percentage.toFixed(1) // Add percentage property
+            percentage, // Store as number for better precision
+            size: sizeBytes // Ensure size is a number
         };
     });
     return { processedAssets, totalSize };
