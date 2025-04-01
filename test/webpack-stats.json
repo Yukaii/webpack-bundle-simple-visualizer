@@ -279,5 +279,44 @@
               "optimizationBailout": [],
               "depth": 0,
               "source": "var _ = require(\"../lodash/lodash.js\");module.exports = function (templateParams) {var compilation = templateParams.compilation;var webpack = templateParams.webpack;var webpackConfig = templateParams.webpackConfig;var htmlWebpackPlugin = templateParams.htmlWebpackPlugin;return (function(data) {\nvar __t, __p = '';\n__p += '<!DOCTYPE html>\\n<html>\\n  <head>\\n    <meta charset=\"UTF-8\">\\n    <title>' +\n((__t = ( htmlWebpackPlugin.options.title )) == null ? '' : __t) +\n'</title>\\n  </head>\\n  <body>\\n  </body>\\n</html>';\nreturn __p\n})();}"
-            },
-            
+            }
+          ],
+          "filteredModules": 0,
+          "origins": []
+        }
+      ],
+      "modules": [
+        {
+          "id": 0,
+          "identifier": "/mnt/c/Users/selarkin/Code/generic-webpack-project/node_modules/html-webpack-plugin/lib/loader.js!/mnt/c/Users/selarkin/Code/generic-webpack-project/node_modules/html-webpack-plugin/default_index.ejs",
+          "name": "./node_modules/html-webpack-plugin/lib/loader.js!./node_modules/html-webpack-plugin/default_index.ejs",
+          "index": 0,
+          "index2": 3,
+          "size": 538,
+          "cacheable": true,
+          "built": true,
+          "optional": false,
+          "prefetched": false,
+          "chunks": [
+            0
+          ],
+          "assets": [],
+          "issuer": null,
+          "issuerId": null,
+          "issuerName": null,
+          "failed": false,
+          "errors": 0,
+          "warnings": 0,
+          "reasons": [],
+          "usedExports": true,
+          "providedExports": null,
+          "optimizationBailout": [],
+          "depth": 0,
+          "source": "var _ = require(\"../lodash/lodash.js\");module.exports = function (templateParams) {var compilation = templateParams.compilation;var webpack = templateParams.webpack;var webpackConfig = templateParams.webpackConfig;var htmlWebpackPlugin = templateParams.htmlWebpackPlugin;return (function(data) {\nvar __t, __p = '';\n__p += '<!DOCTYPE html>\\n<html>\\n  <head>\\n    <meta charset=\"UTF-8\">\\n    <title>' +\n((__t = ( htmlWebpackPlugin.options.title )) == null ? '' : __t) +\n'</title>\\n  </head>\\n  <body>\\n  </body>\\n</html>';\nreturn __p\n})();}"
+        }
+      ],
+      "filteredModules": 0,
+      "name": "html-webpack-plugin for \"index.html\""
+    }
+  ]
+}
